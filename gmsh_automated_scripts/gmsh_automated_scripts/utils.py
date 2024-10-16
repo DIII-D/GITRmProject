@@ -23,9 +23,8 @@ def rectangle_def(x, y, z, width, height):
     l4 = gmsh.model.occ.addLine(p4, p1)  # Left edge# Define a rectangle in the XY plane
     
     loop = gmsh.model.occ.addCurveLoop([l1, l2, l3, l4])
-    surface = gmsh.model.occ.addPlaneSurface([loop])
     
-    return p1, p2, p3, p4, l1, l2, l3, l4, loop, surface
+    return p1, p2, p3, p4, l1, l2, l3, l4, loop
 
 #%%
 def create_loops(input_dict, z_dimes, volumes_surfaces, dot_loops, ax, ay, az, theta_dimes):
@@ -52,7 +51,8 @@ def create_loops(input_dict, z_dimes, volumes_surfaces, dot_loops, ax, ay, az, t
             width = elem_def['width']
             height = elem_def['height']
             
-            dot_loop, dot_surface = rectangle_def(x, y, z, width, height)[-2:]
+            dot_loop = rectangle_def(x, y, z, width, height)[-1]
+            dot_surface = gmsh.model.occ.addPlaneSurface([dot_loop])
             gmsh.model.occ.rotate([(2 , dot_surface)], x + width / 2, y + height / 2, z, ax, ay, az, theta_dimes)
         
         # store dots loops IDs

@@ -20,7 +20,7 @@ def mesh_generation(filename = "test.msh" , save_msh=False , GUI=True):
     gmsh.option.setNumber("Mesh.MeshSizeMin", 0.05)
     # Set maximum mesh characteristic length for the whole model
     gmsh.option.setNumber("Mesh.CharacteristicLengthMax", 0.2) 
-    gmsh.model.mesh.generate(3)
+    gmsh.model.mesh.generate(2)
     
     if GUI:
     # Launch the GUI to see the results:

@@ -19,7 +19,6 @@ from gmsh_automated_scripts.utils2 import generate_dimes_mesh
 
 """ INPUT dots in structure """
 
-N_dots = 3
 Names = ["Dot_1","Dot_2","Dot_3"]
 
 input_dict = {

@@ -32,12 +32,12 @@ def make_dimes_geom(input_dict, l_radial=4, l_toroidal=4, l_vertical=3,
     
     # Create a curve loop for plasma volume base
     p1, p2, p3, p4, l1, l2, l3, l4, plasma_base_rectangle_loop = \
-        rectangle_def(x_plasma_volume_ll, y_plasma_volume_ll, z_plasma_volume_ll, width, height)[:-1]
+        rectangle_def(x_plasma_volume_ll, y_plasma_volume_ll, z_plasma_volume_ll, width, height)
     
     # Create a curve loop for plasma_volume top
     
     p5, p6, p7, p8, l5, l6, l7, l8, plasma_top_rectangle_loop = rectangle_def(x_plasma_volume_ll, y_plasma_volume_ll, \
-                                                              z_plasma_volume_ll + dz_plasma_volume, width, height)[:-1]
+                                                              z_plasma_volume_ll + dz_plasma_volume, width, height)
 
 
     # Create vertical lines connecting bottom and top
