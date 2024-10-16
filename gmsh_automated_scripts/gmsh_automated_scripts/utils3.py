@@ -7,7 +7,7 @@ Created on Tue Oct 15 16:08:13 2024
 """
 import gmsh
 
-def mesh_generation(filename = "test.msh" , GUI=True):
+def mesh_generation(filename = "test.msh" , save_msh=False , GUI=True):
     #%% Generate the mesh and visualize the result
 
     # Final synchronization of the CAD model
@@ -27,7 +27,8 @@ def mesh_generation(filename = "test.msh" , GUI=True):
     # Optionally, run the GUI to visualize
         gmsh.fltk.run()
         
-    gmsh.write(filename)
+    if save_msh:
+        gmsh.write(filename)
     
     # Finalize GMSH
     gmsh.finalize()
