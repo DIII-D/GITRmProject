@@ -6,10 +6,12 @@ Created on Tue Oct 15 16:07:27 2024
 @author: cappellil
 """
 import gmsh
+import math
 from .utils import rectangle_def , create_loops
 
-def make_dimes_geom(input_dict, l_radial=12, l_toroidal=12, l_vertical=5, 
-                                 x_center_dimes = 0, y_center_dimes =0 , z_center_dimes=0, r_dimes = 1):
+def make_dimes_geom(input_dict, l_radial=4, l_toroidal=4, l_vertical=3, 
+                                 x_center_dimes = 0, y_center_dimes =0 , z_center_dimes=1, r_dimes = 1, 
+                                 ax=0, ay=1, az=0, theta_dimes= math.pi / 180 * 20):
     #%% 
     
     """ Plasma volume geometry """
@@ -29,14 +31,15 @@ def make_dimes_geom(input_dict, l_radial=12, l_toroidal=12, l_vertical=5,
     dz_plasma_volume = l_vertical  # This variable is defined but not used in this surface creation
     
     # Create a curve loop for plasma volume base
-    plasma_base_rectangle_loop, p1, p2, p3, p4, l1, l2, l3, l4 = \
-        rectangle_def(x_plasma_volume_ll, y_plasma_volume_ll, z_plasma_volume_ll, width, height) 
+    p1, p2, p3, p4, l1, l2, l3, l4, plasma_base_rectangle_loop = \
+        rectangle_def(x_plasma_volume_ll, y_plasma_volume_ll, z_plasma_volume_ll, width, height)[:-1]
     
     # Create a curve loop for plasma_volume top
     
-    plasma_top_rectangle_loop, p5, p6, p7, p8, l5, l6, l7, l8 = rectangle_def(x_plasma_volume_ll, y_plasma_volume_ll, \
-                                                              z_plasma_volume_ll + dz_plasma_volume, width, height) 
-        
+    p5, p6, p7, p8, l5, l6, l7, l8, plasma_top_rectangle_loop = rectangle_def(x_plasma_volume_ll, y_plasma_volume_ll, \
+                                                              z_plasma_volume_ll + dz_plasma_volume, width, height)[:-1]
+
+
     # Create vertical lines connecting bottom and top
     l9 = gmsh.model.occ.addLine(p1, p5)
     l10 = gmsh.model.occ.addLine(p2, p6)
@@ -70,7 +73,7 @@ def make_dimes_geom(input_dict, l_radial=12, l_toroidal=12, l_vertical=5,
     #%% 
     """ DiMES geometry """
     
-    DiMES_circle = gmsh.model.occ.addCircle(x_center_dimes , y_center_dimes , 0 , r_dimes)
+    DiMES_circle = gmsh.model.occ.addCircle(x_center_dimes , y_center_dimes , z_center , r_dimes)
     
     DiMES_circle_loop = gmsh.model.occ.addCurveLoop([DiMES_circle])
     
@@ -79,23 +82,34 @@ def make_dimes_geom(input_dict, l_radial=12, l_toroidal=12, l_vertical=5,
     # store surfaces enclosing volume in a variable
     volumes_surfaces.append(plasma_base)
     
-    if z_center_dimes > 0:                  
+    if z_center_dimes > 0: 
+        
+        r1 = r_dimes / math.cos(theta_dimes) # major radius
+        r2 = r_dimes  #minor radius (r1 >= r2)
+        ellipse = gmsh.model.occ.addEllipse(x_center_dimes, y_center_dimes, z_center_dimes, r1, r2)
+        
+        gmsh.model.occ.rotate([(1 , ellipse)], x_center_dimes, y_center_dimes, z_center_dimes, ax, ay, az, theta_dimes)
+        ellipse_loop = gmsh.model.occ.addCurveLoop([ellipse])               
     
-        DiMES_edge_surface = gmsh.model.occ.extrude([(1,DiMES_circle)], 0, 0, z_center_dimes)
+        # Volumes and surfaces can be constructed from (closed) curve loops thanks to the
+        # `addThruSections()' function
+    
+        DiMES_side_surface = gmsh.model.occ.addThruSections([DiMES_circle_loop, ellipse_loop], makeSolid = False)
+      
             
         # store surfaces enclosing volume in a variable
-        for tup in DiMES_edge_surface:
+        for tup in DiMES_side_surface:
             if tup[0] == 2:
-                DiMES_edge_surface_id = tup[1]
+                DiMES_side_surface_id = tup[1]
                 break
         
-        volumes_surfaces.append(DiMES_edge_surface_id)
+        volumes_surfaces.append(DiMES_side_surface_id)
         
         #identify top_circle loop
-        DiMES_top_circle_loop = gmsh.model.occ.addCurveLoop([DiMES_edge_surface[0][1]])
+        DiMES_top_curve_loop = gmsh.model.occ.addCurveLoop([ellipse])
         
     else:
-        DiMES_top_circle_loop = DiMES_circle_loop
+        DiMES_top_curve_loop = DiMES_circle_loop
         
     #%%
     
@@ -103,11 +117,11 @@ def make_dimes_geom(input_dict, l_radial=12, l_toroidal=12, l_vertical=5,
         
     dot_loops = []
     
-    create_loops(input_dict, z_center_dimes, volumes_surfaces, dot_loops)
+    create_loops(input_dict, z_center_dimes, volumes_surfaces, dot_loops, ax, ay, az, theta_dimes)
 
     # Generate DiMES top surface
     gmsh.model.occ.synchronize()
-    DiMES_top_surface = gmsh.model.occ.addPlaneSurface([DiMES_top_circle_loop] + dot_loops)
+    DiMES_top_surface = gmsh.model.occ.addPlaneSurface([DiMES_top_curve_loop] + dot_loops)
     
     # store surfaces enclosing volume in a variable
     volumes_surfaces.append(DiMES_top_surface)
@@ -115,6 +129,7 @@ def make_dimes_geom(input_dict, l_radial=12, l_toroidal=12, l_vertical=5,
     #%% generate the volume
     plasma_volume = gmsh.model.occ.addVolume([gmsh.model.occ.addSurfaceLoop(volumes_surfaces)])
     
+    return plasma_volume
 
 #%% 
 """ function """

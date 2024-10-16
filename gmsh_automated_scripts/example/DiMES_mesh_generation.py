@@ -7,6 +7,10 @@ Created on Tue Oct 15 15:54:25 2024
 """
 #%%
 
+# set working directory
+import os
+os.chdir('/home/cappellil/GITRmProject/gmsh_automated_scripts')
+
 from gmsh_automated_scripts.utils2 import generate_dimes_mesh 
 # Initialize GMSH
 

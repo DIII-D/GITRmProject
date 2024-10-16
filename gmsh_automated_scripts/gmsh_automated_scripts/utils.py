@@ -23,11 +23,12 @@ def rectangle_def(x, y, z, width, height):
     l4 = gmsh.model.occ.addLine(p4, p1)  # Left edge# Define a rectangle in the XY plane
     
     loop = gmsh.model.occ.addCurveLoop([l1, l2, l3, l4])
+    surface = gmsh.model.occ.addPlaneSurface([loop])
     
-    return loop, p1, p2, p3, p4, l1, l2, l3, l4
+    return p1, p2, p3, p4, l1, l2, l3, l4, loop, surface
 
 #%%
-def create_loops(input_dict, z_dimes, volumes_surfaces, dot_loops):
+def create_loops(input_dict, z_dimes, volumes_surfaces, dot_loops, ax, ay, az, theta_dimes):
 
     for elem_def in input_dict.values():
     
@@ -39,8 +40,9 @@ def create_loops(input_dict, z_dimes, volumes_surfaces, dot_loops):
             r = elem_def['radius']
             
             dot_shape = gmsh.model.occ.addCircle(x, y, z, r)
-            
             dot_loop = gmsh.model.occ.addCurveLoop([dot_shape])
+            dot_surface = gmsh.model.occ.addPlaneSurface([dot_loop])
+            gmsh.model.occ.rotate([(2 , dot_surface)], x, y, z, ax, ay, az, theta_dimes)
                     
         elif elem_def["shape"] == "rectangle":
             
@@ -50,14 +52,11 @@ def create_loops(input_dict, z_dimes, volumes_surfaces, dot_loops):
             width = elem_def['width']
             height = elem_def['height']
             
-            dot_loop = rectangle_def(x, y, z, width, height)
-            dot_loop = dot_loop[0]
+            dot_loop, dot_surface = rectangle_def(x, y, z, width, height)[-2:]
+            gmsh.model.occ.rotate([(2 , dot_surface)], x + width / 2, y + height / 2, z, ax, ay, az, theta_dimes)
         
         # store dots loops IDs
         dot_loops.append(dot_loop)
-        
-        # create dots surfaces
-        gmsh.model.occ.addPlaneSurface([dot_loop])
         
         # store surfaces enclosing volume in a variable
         volumes_surfaces.append(gmsh.model.occ.addPlaneSurface([dot_loop]))
