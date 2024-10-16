@@ -7,9 +7,13 @@ Created on Tue Oct 15 15:54:25 2024
 """
 #%%
 
-# set working directory
+# set working directory equal to gmsh_automated_scripts directory
+import sys
 import os
-os.chdir('/home/cappellil/GITRmProject/gmsh_automated_scripts')
+
+# Add the path to the script directory
+script_path = os.path.abspath(os.environ['PWD'])
+sys.path.append("../")
 
 from gmsh_automated_scripts.utils2 import generate_dimes_mesh 
 # Initialize GMSH
@@ -26,7 +30,7 @@ input_dict = {
         "shape": "circle",
         "x": 0,
         "y": 0.75,
-        "radius": 0.05  # For cylinder
+        "radius": 0.1  # For cylinder
     },
     Names[1]: {
         "shape": "rectangle",
@@ -39,9 +43,9 @@ input_dict = {
         "shape": "circle",
         "x": 0,
         "y": -0.75,
-        "radius": 0.05
+        "radius": 0.1
     }
     # Add more dots as needed
 }
 
-generate_dimes_mesh(input_dict, theta_dimes=0, msh_dim=2)
+generate_dimes_mesh(input_dict, theta_dimes=25, msh_dim=2)
