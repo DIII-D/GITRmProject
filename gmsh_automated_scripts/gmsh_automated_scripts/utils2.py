@@ -137,9 +137,10 @@ def make_dimes_geom(input_dict, l_radial=4, l_toroidal=4, l_vertical=3,
 
 #%% 
 """ function """
-
-def make_dimes_mesh(filename = "test.msh" , GUI_geo=False, GUI_msh=True):
+    
+def make_dimes_mesh(filename = "test.msh" , save_msh=False, GUI_geo=False, GUI_msh=True , msh_dim=3):
     #%% Generate the mesh and visualize the result
+    
     if GUI_geo:
     # Launch the GUI to see the results:
     # Optionally, run the GUI to visualize
@@ -154,14 +155,18 @@ def make_dimes_mesh(filename = "test.msh" , GUI_geo=False, GUI_msh=True):
     gmsh.option.setNumber("Mesh.MeshSizeMin", 0.05)
     # Set maximum mesh characteristic length for the whole model
     gmsh.option.setNumber("Mesh.CharacteristicLengthMax", 0.2) 
-    gmsh.model.mesh.generate(3)
+    gmsh.model.mesh.generate(msh_dim)
     
     if GUI_msh:
     # Launch the GUI to see the results:
     # Optionally, run the GUI to visualize
         gmsh.fltk.run()
+        
+    if save_msh:
+        gmsh.write(filename)
     
-    gmsh.write(filename)
+    # Finalize GMSH
+    gmsh.finalize()
     
 
 #%%
@@ -178,7 +183,7 @@ def generate_dimes_mesh(input_dict, **kwargs):
     # Defining keys specific to geometry and mesh
     geo_specific_keys = ['input_dict', 'l_radial', 'l_toroidal','l_vertical','x_center_dimes',
                          'y_center_dimes','z_center_dimes','r_dimes' ,'ax','ay', 'az', 'theta_dimes']
-    mesh_specific_keys = ['filename', 'GUI_geo', 'GUI_msh']    
+    mesh_specific_keys = ['filename', 'save_msh', 'GUI_geo', 'GUI_msh', 'msh_dim']    
     
     kw_geo = {key: value for key, value in kwargs.items() if key in geo_specific_keys}
     kw_msh = {key: value for key, value in kwargs.items() if key in mesh_specific_keys}
