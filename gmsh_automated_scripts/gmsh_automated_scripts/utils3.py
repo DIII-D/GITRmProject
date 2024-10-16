@@ -7,7 +7,7 @@ Created on Tue Oct 15 16:08:13 2024
 """
 import gmsh
 
-def mesh_generation(filename = "test.msh" , save_msh=False , GUI=True):
+def mesh_generation(filename = "test.msh" , save_msh=False , GUI=True , msh_dim=3):
     #%% Generate the mesh and visualize the result
 
     # Final synchronization of the CAD model
@@ -20,7 +20,7 @@ def mesh_generation(filename = "test.msh" , save_msh=False , GUI=True):
     gmsh.option.setNumber("Mesh.MeshSizeMin", 0.05)
     # Set maximum mesh characteristic length for the whole model
     gmsh.option.setNumber("Mesh.CharacteristicLengthMax", 0.2) 
-    gmsh.model.mesh.generate(2)
+    gmsh.model.mesh.generate(msh_dim)
     
     if GUI:
     # Launch the GUI to see the results:

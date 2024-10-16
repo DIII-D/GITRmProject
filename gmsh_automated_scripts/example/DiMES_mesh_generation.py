@@ -44,4 +44,4 @@ input_dict = {
     # Add more dots as needed
 }
 
-generate_dimes_mesh(input_dict)
+generate_dimes_mesh(input_dict, theta_dimes=0, msh_dim=2)

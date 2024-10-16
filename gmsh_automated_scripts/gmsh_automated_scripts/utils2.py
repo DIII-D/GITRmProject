@@ -11,7 +11,11 @@ from .utils import rectangle_def , create_loops
 
 def make_dimes_geom(input_dict, l_radial=4, l_toroidal=4, l_vertical=3, 
                                  x_center_dimes = 0, y_center_dimes =0 , z_center_dimes=1, r_dimes = 1, 
-                                 ax=0, ay=1, az=0, theta_dimes= math.pi / 180 * 20):
+                                 ax=0, ay=1, az=0, theta_dimes=math.pi / 180 * 20):
+    
+    theta_dimes = math.pi / 180 * theta_dimes 
+    
+    
     #%% 
     
     """ Plasma volume geometry """
@@ -163,7 +167,7 @@ def make_dimes_mesh(filename = "test.msh" , GUI_geo=False, GUI_msh=True):
 #%%
 """ function """
 
-def generate_dimes_mesh(input_dict, **kw): 
+def generate_dimes_mesh(input_dict, **kwargs): 
     try:
         gmsh.finalize()
     except: 
@@ -171,8 +175,16 @@ def generate_dimes_mesh(input_dict, **kw):
     finally:
         gmsh.initialize()
         
-    make_dimes_geom(input_dict, **kw)
-    make_dimes_mesh(**kw)
+    # Defining keys specific to geometry and mesh
+    geo_specific_keys = ['input_dict', 'l_radial', 'l_toroidal','l_vertical','x_center_dimes',
+                         'y_center_dimes','z_center_dimes','r_dimes' ,'ax','ay', 'az', 'theta_dimes']
+    mesh_specific_keys = ['filename', 'GUI_geo', 'GUI_msh']    
+    
+    kw_geo = {key: value for key, value in kwargs.items() if key in geo_specific_keys}
+    kw_msh = {key: value for key, value in kwargs.items() if key in mesh_specific_keys}
+    
+    make_dimes_geom(input_dict, **kw_geo)
+    make_dimes_mesh(**kw_msh)
     
     try:
         gmsh.finalize()
