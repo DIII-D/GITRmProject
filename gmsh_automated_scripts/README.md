@@ -17,9 +17,9 @@ Also, a short tutorial on how to use poetry with conda or mamba is provided in t
 
 # Documentation 
 
-The package consists of two files encoding all functions needed to run 'generate_dimes_mesh(input_dict,**kwargs)'
+The package consists of two files encoding all functions needed to run **generate_dimes_mesh(input_dict,**kwargs)**
 
-'generate_dimes_mesh(input_dict,**kwargs)' automatically generates the DiMES mesh for a given input.
+**generate_dimes_mesh(input_dict,**kwargs)** automatically generates the DiMES mesh for a given input.
 
 ### PARAMETERS: (KEYWORDS DESCRIPTION IS AFTER kwargs)
     
