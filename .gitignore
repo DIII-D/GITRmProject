@@ -24,6 +24,7 @@ docs/site/
 Manifest.toml
 gmsh_automated_scripts/poetry.lock
 gmsh_automated_scripts/gmsh_automated_scripts/__pycache__/
+gmsh_automated_scripts/gmsh_automated_scripts/__pycache__/*
 gmsh_automated_scripts/*.msh
 *.msh
 
