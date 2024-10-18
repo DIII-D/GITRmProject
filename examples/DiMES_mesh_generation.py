@@ -6,6 +6,12 @@ Created on Tue Oct 15 15:54:25 2024
 @author: cappellil
 """
 # %%
+# it is recommended to use this script in a conda/mamba environment, .e.g. with:
+#  mamba create -n GITRMProject python=3.11 matplotlib numpy spyder=5.5`
+#  mamba activate GITRMProject`
+#  cd GITRMProject/gmsh_automated_scripts
+#  poetry install
+
 
 from gmsh_automated_scripts import generate_dimes_mesh
 
