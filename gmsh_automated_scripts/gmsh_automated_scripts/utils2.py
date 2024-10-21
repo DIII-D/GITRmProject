@@ -10,9 +10,9 @@ import math
 from .utils import rectangle_def, create_loops
 
 
-def make_dimes_geom(input_dict, l_radial=4, l_toroidal=4, l_vertical=3,
+def make_dimes_geom(input_dict, l_radial=8, l_toroidal=8, l_vertical=8,
                     x_center=0, y_center=0, z_center=0,
-                    x_center_dimes=0, y_center_dimes=0, z_center_dimes=1, r_dimes=1,
+                    x_center_dimes=0, y_center_dimes=0, z_top_dimes=1, r_dimes=2.5,
                     ax=0, ay=1, az=0, theta_dimes=0):
 
     # convert deg to rad
@@ -40,8 +40,9 @@ def make_dimes_geom(input_dict, l_radial=4, l_toroidal=4, l_vertical=3,
 
     # Create a curve loop for plasma_volume top
 
-    p5, p6, p7, p8, l5, l6, l7, l8, plasma_top_rectangle_loop = rectangle_def(x_plasma_volume_ll, y_plasma_volume_ll,
-                                                                              z_plasma_volume_ll + dz_plasma_volume, width, height)
+    p5, p6, p7, p8, l5, l6, l7, l8, plasma_top_rectangle_loop = \
+        rectangle_def(x_plasma_volume_ll, y_plasma_volume_ll,
+                      z_plasma_volume_ll + dz_plasma_volume, width, height)
 
     # Create vertical lines connecting bottom and top
     l9 = gmsh.model.occ.addLine(p1, p5)
@@ -93,15 +94,15 @@ def make_dimes_geom(input_dict, l_radial=4, l_toroidal=4, l_vertical=3,
     # store surfaces enclosing volume in a variable
     volumes_surfaces.append(plasma_base)
 
-    if z_center_dimes > z_center:
+    if z_top_dimes > z_center:
 
         r1 = r_dimes / math.cos(theta_dimes)  # major radius
         r2 = r_dimes  # minor radius (r1 >= r2)
         ellipse = gmsh.model.occ.addEllipse(
-            x_center_dimes, y_center_dimes, z_center_dimes, r1, r2)
+            x_center_dimes, y_center_dimes, z_top_dimes, r1, r2)
 
         gmsh.model.occ.rotate([(1, ellipse)], x_center_dimes,
-                              y_center_dimes, z_center_dimes, ax, ay, az, theta_dimes)
+                              y_center_dimes, z_top_dimes, ax, ay, az, theta_dimes)
         ellipse_loop = gmsh.model.occ.addCurveLoop([ellipse])
 
         # Volumes and surfaces can be constructed from (closed) curve loops thanks to the
@@ -130,7 +131,7 @@ def make_dimes_geom(input_dict, l_radial=4, l_toroidal=4, l_vertical=3,
 
     dot_loops = []
 
-    create_loops(input_dict, z_center_dimes, volumes_surfaces,
+    create_loops(input_dict, z_top_dimes, volumes_surfaces,
                  dot_loops, ax, ay, az, theta_dimes)
 
     # Generate DiMES top surface
@@ -199,7 +200,7 @@ This function automatically generates the DiMES mesh for a given set of dot geom
 
   - x_center_dimes: The X-coordinate of the center of the DiMES base (float, default: 0).
   - y_center_dimes: The Y-coordinate of the center of the DiMES base (float, default: 0).
-  - z_center_dimes: The Z-coordinate of the center of the DiMES base (float, default: 0).
+  - z_top_dimes: The Z-coordinate of the center of the DiMES base (float, default: 0).
   - r_dimes: The radius of the DiMES base (float, default: 1).
   - x_center: The X-coordinate of the plasma volume base surface center (float, default: 0).
   - y_center: The Y-coordinate of the plasma volume base surface center (float, default: 0).
@@ -228,7 +229,7 @@ The geometry is defined by its center and radius:
 
 - `x_center_dimes`: The X-coordinate of the center of the DiMES base (float).
 - `y_center_dimes`: The Y-coordinate of the center of the DiMES base (float).
-- `z_center_dimes`: The Z-coordinate of the center of the DiMES base (float).
+- `z_top_dimes`: The Z-coordinate of the center of the DiMES base (float).
 - `r_dimes`: The radius of the DiMES base (float).
 
 #### Plasma Volume:
@@ -333,7 +334,7 @@ Before generating the mesh, users can configure several options:
 
     # Defining keys specific to geometry and mesh
     geo_specific_keys = ['input_dict', 'l_radial', 'l_toroidal', 'l_vertical', 'x_center_dimes',
-                         'y_center_dimes', 'z_center_dimes', 'r_dimes', 'ax', 'ay', 'az', 'theta_dimes']
+                         'y_center_dimes', 'z_top_dimes', 'r_dimes', 'ax', 'ay', 'az', 'theta_dimes']
     mesh_specific_keys = ['filename', 'save_msh',
                           'GUI_geo', 'GUI_msh', 'msh_dim']
 
