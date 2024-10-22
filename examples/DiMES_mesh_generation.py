@@ -24,7 +24,7 @@ input_dict = {
         "x": 0,
         "y": 1.5,
         "radius": 0.5,  # For cylinder
-        "theta_dot": 15
+        "theta_dot": 10
     },
     "Rectangle_2": {
         "shape": "rectangle",
@@ -32,16 +32,16 @@ input_dict = {
         "y": -0.25,
         "width": 1,
         "height": 0.5,
-        "theta_dot": 10
+        "theta_dot": 0
     },
     "Dot_3": {
         "shape": "circle",
         "x": 0,
         "y": -1.5,
         "radius": 0.5,
-        "theta_dot": 5
+        "theta_dot": 10
     }
     # Add more dots as needed
 }
 
-generate_dimes_mesh(input_dict, z_top_dimes=0, msh_dim=3, ax=-1, ay=0)
+generate_dimes_mesh(input_dict, msh_dim=3, ay=-1)

@@ -31,10 +31,18 @@ def rectangle_def(x, y, z, width, height):
 #%%
 def create_loops(input_dict, z_dimes, volumes_surfaces, dot_loops, ax, ay, az, theta_dimes):
     
-    if z_dimes < 1e-3:
-        theta_dimes = 0
-        print("z_top_dimes too small to rotate dimes head. theta_dimes = 0 \n")
-
+    # check if user is not tilting both DiMES head and dots
+    
+    if theta_dimes != 0:
+    
+        for elem_def in input_dict.values():
+    # Check if theta_dot exists and is not zero
+            if "theta_dot" in elem_def and elem_def["theta_dot"] != 0:
+                print(f"{elem_def}: theta_dot is not zero (theta_dot = {elem_def['theta_dot']})")
+                raise Exception("You are setting a tilted dot (theta_dot != 0) " \
+                      "on a tilted DiMES head (theta_dimes !=0), this could be problematic")
+                    
+                    
     for elem_def in input_dict.values():
     
         if elem_def["shape"] == "circle":
@@ -45,6 +53,12 @@ def create_loops(input_dict, z_dimes, volumes_surfaces, dot_loops, ax, ay, az, t
             r = elem_def['radius']
             theta_dot =  theta_dimes + math.pi / 180 * elem_def['theta_dot']
             
+            # z_dimes_tilt indicates the z position of dot over a tilted DiMES
+            
+            z_dimes_tilt = math.tan(theta_dimes) * (ay * x + ax * y)
+            
+            z += z_dimes_tilt
+            
             # if dot coating surface is not tilted, dot simulated as a Disk
             # coplanar with the DiMES head
             
@@ -52,15 +66,31 @@ def create_loops(input_dict, z_dimes, volumes_surfaces, dot_loops, ax, ay, az, t
             # and a circle at the base
             
             # create base circle coplanar with DiMES head
-            dot_base_curve = gmsh.model.occ.addEllipse(x , y  , z , r / math.cos(theta_dimes) , r)
+            r1 = r / math.cos(theta_dimes) # greater radius
+            r2 = r # smaller radius
+            
+            dot_base_curve = gmsh.model.occ.addEllipse(x , y  , z , r1, r2)
+            
+            # if you want to rotate the dot around the x-axis, since the ellipse must
+            # be turned before around the z-axis of 90 deg so that the major radius is along the y-axis
+            # also the circle must be rotated otherwise the addThruSection function won't work properly
+            # when you want to create the side surface
+            
+            if ax != 0:
+                gmsh.model.occ.rotate([(1, dot_base_curve)], x,
+                                      y, z, 0, 0, 1, math.pi / 2)
+                
+            
             gmsh.model.occ.rotate([(1 , dot_base_curve)], x, y, z, ax, ay, az, theta_dimes)
+            
             dot_base_loop = gmsh.model.occ.addCurveLoop([dot_base_curve])
             
             # append base loop to list of holes to create DiMES head surface
             dot_loops.append(dot_base_loop)
             
             
-            if theta_dot != 0:
+            if theta_dot > theta_dimes:
+                
                 
                 #---------------------
                 
@@ -84,15 +114,25 @@ def create_loops(input_dict, z_dimes, volumes_surfaces, dot_loops, ax, ay, az, t
                 
                 # 1. shift ellipse along z to avoid intersection with DiMES head surface
                 # after rotation
-                delta_z = r * abs(math.tan(theta_dot - theta_dimes)) + 0.0001 # 0.0001 to avoid tolerance issues with gmsh
                 
-                # 2. make top elliptical surface
-                dot_top_curve = gmsh.model.occ.addEllipse(x  , y , z + delta_z, r / math.cos(theta_dot), r)
+                delta_z = r * abs(math.tan(theta_dot - theta_dimes)) + 0.0001 # + 0.0001 to avoid intersecting facets
+                
+                z += delta_z
+                
+                # 2. make top elliptical curve
+                dot_top_curve = gmsh.model.occ.addEllipse(x  , y , z, r / math.cos(theta_dot), r)
+                
+                
+                # 3. rotate top elliptical curve (remember: you can't rotate loops) and make surface
+                
+                if ax != 0:
+                    gmsh.model.occ.rotate([(1, dot_top_curve)], x,
+                                          y, z, 0, 0, 1, math.pi / 2)
+                
+                gmsh.model.occ.rotate([(1 , dot_top_curve)], x, y, z, ax, ay, az, theta_dot)
+                
                 dot_top_loop = gmsh.model.occ.addCurveLoop([dot_top_curve])
                 dot_top_surface = gmsh.model.occ.addPlaneSurface([dot_top_loop])
-                
-                # 3. rotate elliptical surface
-                gmsh.model.occ.rotate([(2 , dot_top_surface)], x, y, z + delta_z, ax, ay, az, theta_dot)
                 
                 # 4. create side surface
                 dot_side_surface = gmsh.model.occ.addThruSections([dot_base_loop, dot_top_loop], makeSolid = False)
@@ -131,6 +171,12 @@ def create_loops(input_dict, z_dimes, volumes_surfaces, dot_loops, ax, ay, az, t
             # otherwise dot simulated as a wedge delimitated by a tilted plane at the top
             # and a plane coplanar to DiMES head at the base
             
+            # z_dimes_tilt indicates the z position of dot over a tilted DiMES
+            
+            z_dimes_tilt = math.tan(theta_dimes) * (ay * x + ax * y) 
+            
+            z += z_dimes_tilt
+            
             # translate base rectangle to be coplanar with DiMES head and to avoid intersections
             delta_z = 0.001 # to avoid overlapping between curves
             delta_z_dimes = ay * width / 2 * math.tan(theta_dimes)
@@ -155,7 +201,7 @@ def create_loops(input_dict, z_dimes, volumes_surfaces, dot_loops, ax, ay, az, t
                 # - about the y-axis (ax=0, ay=±1, az=0)
                 # - about the x-axis (ax=±1, ay=0, az=0)
                 #
-                # ** all other combinations might not work for rectangular dots
+                # ** all other combinations might not work
                 #
                 #
                 # ** if theta_dimes !=0  dots should be centered symmetrical along axis perp.
@@ -176,6 +222,15 @@ def create_loops(input_dict, z_dimes, volumes_surfaces, dot_loops, ax, ay, az, t
                 #---------------------
                 
                 # Create top plane:
+                    
+                # actualization of z axis at dot position
+                
+                x_c = x + width / 2
+                
+                y_c = y + height / 2
+                
+                z_dimes_tilt = math.tan(theta_dimes) * (ay * x_c + ax * y_c)
+                z += z_dimes_tilt
                 
                 # 1. Get the top plane individual lines (curves) lengths before rotation
                 w = width * math.cos(theta_dimes) / math.cos(theta_dot) # width of rotated rectangle
