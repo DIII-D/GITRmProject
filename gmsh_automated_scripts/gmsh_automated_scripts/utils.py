@@ -7,6 +7,7 @@ Created on Tue Oct 15 16:06:17 2024
 """
 import gmsh
 import math
+from .helpers import z_on_tilted_surface
 
 #%%
 """ miscellaneous functions """
@@ -55,10 +56,8 @@ def create_loops(input_dict, z_dimes, volumes_surfaces, dot_loops, ax, ay, az, t
             
             # z_dimes_tilt indicates the z position of dot over a tilted DiMES
             
-            z_dimes_tilt = math.tan(theta_dimes) * (ay * x + ax * y)
-            
-            z += z_dimes_tilt
-            
+            z = z_on_tilted_surface(z_dimes, x, y, ax, ay, theta_dimes)
+
             # if dot coating surface is not tilted, dot simulated as a Disk
             # coplanar with the DiMES head
             
@@ -86,7 +85,7 @@ def create_loops(input_dict, z_dimes, volumes_surfaces, dot_loops, ax, ay, az, t
             dot_base_loop = gmsh.model.occ.addCurveLoop([dot_base_curve])
             
             # append base loop to list of holes to create DiMES head surface
-            dot_loops.append(dot_base_loop)
+            #dot_loops.append(dot_base_loop)
             
             
             if theta_dot > theta_dimes:
@@ -147,7 +146,7 @@ def create_loops(input_dict, z_dimes, volumes_surfaces, dot_loops, ax, ay, az, t
                 dot_surface = gmsh.model.occ.addPlaneSurface([dot_base_loop])
                 
                 # plane has to be coplanar to DiMES head
-                gmsh.model.occ.rotate([(2 , dot_surface)], x, y, z, ax, ay, az, theta_dimes)
+                # gmsh.model.occ.rotate([(2 , dot_surface)], x, y, z, ax, ay, az, theta_dimes)
                 
                 # append dot_base_loop to list of holes composing DiMES head surface
                 dot_loops.append(dot_base_loop)
@@ -172,28 +171,26 @@ def create_loops(input_dict, z_dimes, volumes_surfaces, dot_loops, ax, ay, az, t
             # and a plane coplanar to DiMES head at the base
             
             # z_dimes_tilt indicates the z position of dot over a tilted DiMES
-            
-            z_dimes_tilt = math.tan(theta_dimes) * (ay * x + ax * y) 
-            
-            z += z_dimes_tilt
+
+            z = z_on_tilted_surface(z, x, y, ax, ay, theta_dimes)
             
             # translate base rectangle to be coplanar with DiMES head and to avoid intersections
             delta_z = 0.001 # to avoid overlapping between curves
-            delta_z_dimes = ay * width / 2 * math.tan(theta_dimes)
-            
+            delta_z_dimes = 0
+
             # 1. Create base lines and curve loop shifted along z
-            base_l1, base_l2, base_l3, base_l4, dot_base_loop = rectangle_def(x, y, z + delta_z_dimes, width , height)[-5:]
+            base_l1, base_l2, base_l3, base_l4, dot_base_loop = rectangle_def(x, y, z, width , height)[-5:]
 
             # 2. rotate rectangle using base_l1 edge as pivotal point around y-axis
             #    and create loop
-            
-            gmsh.model.occ.rotate([(1, base_l1), (1, base_l2), (1, base_l3), (1, base_l4)], x, y, z + delta_z_dimes, ax, ay, az, theta_dimes)
+
+            gmsh.model.occ.rotate([(1, base_l1), (1, base_l2), (1, base_l3), (1, base_l4)], x, y, z, ax, ay, az, theta_dimes)
             dot_base_loop = gmsh.model.occ.addCurveLoop([base_l1, base_l2, base_l3, base_l4])
             
             # append dot_base_loop to list of holes composing DiMES head surface
             dot_loops.append(dot_base_loop)
 
-            if theta_dot != 0:
+            if theta_dot > theta_dimes:
                 
                 #---------------------
                 
@@ -228,9 +225,8 @@ def create_loops(input_dict, z_dimes, volumes_surfaces, dot_loops, ax, ay, az, t
                 x_c = x + width / 2
                 
                 y_c = y + height / 2
-                
-                z_dimes_tilt = math.tan(theta_dimes) * (ay * x_c + ax * y_c)
-                z += z_dimes_tilt
+
+                z = z_on_tilted_surface(z_dimes, x_c, y_c, ax, ay, theta_dimes)
                 
                 # 1. Get the top plane individual lines (curves) lengths before rotation
                 w = width * math.cos(theta_dimes) / math.cos(theta_dot) # width of rotated rectangle
