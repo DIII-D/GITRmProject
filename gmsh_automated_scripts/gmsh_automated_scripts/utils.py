@@ -42,9 +42,11 @@ def create_loops(input_dict, z_dimes, volumes_surfaces, dot_loops, ax, ay, az, t
                 print(f"{elem_def}: theta_dot is not zero (theta_dot = {elem_def['theta_dot']})")
                 raise Exception("You are setting a tilted dot (theta_dot != 0) " \
                       "on a tilted DiMES head (theta_dimes !=0), this could be problematic")
-                    
-                    
-    for elem_def in input_dict.values():
+
+
+    component_surfaces = {}
+
+    for name, elem_def in input_dict.items():
     
         if elem_def["shape"] == "circle":
             
@@ -52,7 +54,7 @@ def create_loops(input_dict, z_dimes, volumes_surfaces, dot_loops, ax, ay, az, t
             y = elem_def['y']
             z = z_dimes
             r = elem_def['radius']
-            theta_dot =  theta_dimes + math.pi / 180 * elem_def['theta_dot']
+            theta_dot = theta_dimes + math.pi / 180 * elem_def.get('theta_dot', 0)
             
             # z_dimes_tilt indicates the z position of dot over a tilted DiMES
             
@@ -89,11 +91,13 @@ def create_loops(input_dict, z_dimes, volumes_surfaces, dot_loops, ax, ay, az, t
             
             
             if theta_dot > theta_dimes:
-                
-                
+
+                if "deposits" in elem_def and elem_def["deposits"]:
+                    raise Exception("Deposits on tilted dots are not supported")
+
                 #---------------------
-                
-                # PLEASE NOTE: this code only works for rotations 
+
+                # PLEASE NOTE: this code only works for rotations
                 # - about the y-axis (ax=0, ay=±1, az=0)
                 # - about the x-axis (ax=±1, ay=0, az=0)
                 #
@@ -139,20 +143,26 @@ def create_loops(input_dict, z_dimes, volumes_surfaces, dot_loops, ax, ay, az, t
                 # 5. append side and top surfaces to list of surface delimiting the plasma volume
                 volumes_surfaces.append(dot_side_surface[0][1])
                 volumes_surfaces.append(dot_top_surface)
-                
+                component_surfaces[name] = [dot_side_surface[0][1], dot_top_surface]
+
             else:
-                
-                # if dot is not tilted, directly use the base to make a disk
-                dot_surface = gmsh.model.occ.addPlaneSurface([dot_base_loop])
-                
-                # plane has to be coplanar to DiMES head
-                # gmsh.model.occ.rotate([(2 , dot_surface)], x, y, z, ax, ay, az, theta_dimes)
-                
-                # append dot_base_loop to list of holes composing DiMES head surface
+
+                # collect child deposit loops to perforate this dot surface
+                child_loops = []
+                child_surfaces = {}
+                if "deposits" in elem_def and elem_def["deposits"]:
+                    child_surfaces = create_loops(elem_def["deposits"], z_dimes, volumes_surfaces,
+                                                  child_loops, ax, ay, az, theta_dimes)
+
+                dot_surface = gmsh.model.occ.addPlaneSurface([dot_base_loop] + child_loops)
+
+                # append dot_base_loop to list of holes composing parent (DiMES or dot) surface
                 dot_loops.append(dot_base_loop)
-                
-                # append disk surfaces to list of surface delimiting the plasma volume
+
+                # append disk surface to list of surfaces delimiting the plasma volume
                 volumes_surfaces.append(dot_surface)
+                component_surfaces[name] = [dot_surface]
+                component_surfaces.update(child_surfaces)
             
                     
         elif elem_def["shape"] == "rectangle":
@@ -162,7 +172,7 @@ def create_loops(input_dict, z_dimes, volumes_surfaces, dot_loops, ax, ay, az, t
             z = z_dimes
             width = elem_def['width']
             height = elem_def['height']
-            theta_dot = theta_dimes +  math.pi / 180 * elem_def['theta_dot']
+            theta_dot = theta_dimes + math.pi / 180 * elem_def.get('theta_dot', 0)
             
             # if dot coating surface is not tilted, dot simulated as a Rectangular surface
             # coplanar with the DiMES head
@@ -191,10 +201,13 @@ def create_loops(input_dict, z_dimes, volumes_surfaces, dot_loops, ax, ay, az, t
             dot_loops.append(dot_base_loop)
 
             if theta_dot > theta_dimes:
-                
+
+                if "deposits" in elem_def and elem_def["deposits"]:
+                    raise Exception("Deposits on tilted dots are not supported")
+
                 #---------------------
-                
-                # PLEASE NOTE: this code only works for rotations 
+
+                # PLEASE NOTE: this code only works for rotations
                 # - about the y-axis (ax=0, ay=±1, az=0)
                 # - about the x-axis (ax=±1, ay=0, az=0)
                 #
@@ -202,17 +215,17 @@ def create_loops(input_dict, z_dimes, volumes_surfaces, dot_loops, ax, ay, az, t
                 #
                 #
                 # ** if theta_dimes !=0  dots should be centered symmetrical along axis perp.
-                # to rotation axis. For instace (if rotation about y, dots should be 
+                # to rotation axis. For instace (if rotation about y, dots should be
                 # located in a position where their central position (x_center==0) .
                 # Otherwise you might encounter issues related to the shift along the z-axis.
-                # For the moment it is better to avoid setting theta_dimes!=0 when 
+                # For the moment it is better to avoid setting theta_dimes!=0 when
                 # also theta_dot!=0
-                
+
                 #---------------------
-                
+
                 #---------------------
-                
-                # PLEASE NOTE 2: even if theta_dimes==0 for rectangular shapes 
+
+                # PLEASE NOTE 2: even if theta_dimes==0 for rectangular shapes
                 # this code only works for rotations about the y-axis (ax=0, ay=±1, az=0)
                 # and the x-axis (ax=±1, ay=0, az=0)
                 
@@ -266,17 +279,26 @@ def create_loops(input_dict, z_dimes, volumes_surfaces, dot_loops, ax, ay, az, t
                 # 6. append side and top surfaces to list of surface delimiting the plasma volume
                 for dim, tag in dot_side_surface:
                     volumes_surfaces.append(tag)
-                    
+
                 volumes_surfaces.append(dot_surface)
-                    
+                component_surfaces[name] = [tag for _, tag in dot_side_surface] + [dot_surface]
+
                 # Synchronize the model to update geometry
                 gmsh.model.occ.synchronize()
             else:
-                # create base surface
-                dot_base_surface = gmsh.model.occ.addPlaneSurface([dot_base_loop])
-                
-                # append disk surfaces to list of surface delimiting the plasma volume
+                # collect child deposit loops to perforate this dot surface
+                child_loops = []
+                child_surfaces = {}
+                if "deposits" in elem_def and elem_def["deposits"]:
+                    child_surfaces = create_loops(elem_def["deposits"], z_dimes, volumes_surfaces,
+                                                  child_loops, ax, ay, az, theta_dimes)
+
+                dot_base_surface = gmsh.model.occ.addPlaneSurface([dot_base_loop] + child_loops)
+
+                # append rectangle surface to list of surfaces delimiting the plasma volume
                 volumes_surfaces.append(dot_base_surface)
-            
-            
-        
+                component_surfaces[name] = [dot_base_surface]
+                component_surfaces.update(child_surfaces)
+
+    return component_surfaces
+

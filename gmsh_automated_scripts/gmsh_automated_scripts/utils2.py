@@ -5,6 +5,7 @@ Created on Tue Oct 15 16:07:27 2024
 
 @author: cappellil
 """
+import os
 import gmsh
 import math
 from .utils import rectangle_def, create_loops
@@ -175,11 +176,12 @@ def make_dimes_geom(input_dict, l_radial=8, l_toroidal=8, l_vertical=8,
     #     pass
     # else:
         
+    dot_component_surfaces = {}
     if no_dots:
         pass
     else:
-        create_loops(input_dict, z_top_dimes, volumes_surfaces,
-                         dot_loops, ax, ay, az, theta_dimes)
+        dot_component_surfaces = create_loops(input_dict, z_top_dimes, volumes_surfaces,
+                                              dot_loops, ax, ay, az, theta_dimes)
 
     # Generate DiMES top surface
     gmsh.model.occ.synchronize()
@@ -192,45 +194,66 @@ def make_dimes_geom(input_dict, l_radial=8, l_toroidal=8, l_vertical=8,
     plasma_volume = gmsh.model.occ.addVolume(
         [gmsh.model.occ.addSurfaceLoop(volumes_surfaces)])
 
-    return plasma_volume
+    # build component surface map (name → list of OCC surface tags)
+    component_surfaces = {
+        "plasma_side_1": [plasma_side1],
+        "plasma_side_2": [plasma_side2],
+        "plasma_side_3": [plasma_side3],
+        "plasma_side_4": [plasma_side4],
+        "plasma_top":    [plasma_top],
+        "plasma_base":   [plasma_base],
+        "DiMES_top":     [DiMES_top_surface],
+    }
+    if theta_dimes != 0:
+        component_surfaces["DiMES_side"] = [DiMES_side_surface_id]
+    component_surfaces.update(dot_component_surfaces)
+
+    return plasma_volume, component_surfaces
 
 
 # %%
 """ function """
 
 
-def make_dimes_mesh(filename="test.msh", save_msh=False, GUI_geo=False, GUI_msh=True, msh_dim=3):
+def make_dimes_mesh(filename="test.msh", save_msh=False, GUI_geo=False, GUI_msh=True,
+                    msh_dim=3, component_surfaces=None, save_ply=False):
     # %% Generate the mesh and visualize the result
 
     # Remove duplicates (coherence)
-    
     gmsh.model.occ.removeAllDuplicates()
-    
+
     # Final synchronization of the CAD model
     gmsh.model.occ.synchronize()
 
+    # Label each component as a named Physical Surface (2-D meshes only)
+    if msh_dim == 2 and component_surfaces is not None:
+        for comp_name, surf_tags in component_surfaces.items():
+            pg = gmsh.model.addPhysicalGroup(2, surf_tags)
+            gmsh.model.setPhysicalName(2, pg, comp_name)
+
     if GUI_geo:
-        # Launch the GUI to see the results:
-        # Optionally, run the GUI to visualize
         gmsh.fltk.run()
-    
 
     gmsh.option.setNumber("Mesh.MeshSizeFromCurvature", 1)
     gmsh.option.setNumber("Mesh.MinimumElementsPerTwoPi", 20)
 
-    # # Prevent very small elements in small dots
+    # Prevent very small elements in small dots
     gmsh.option.setNumber("Mesh.MeshSizeMin", 0.05)
     # Set maximum mesh characteristic length for the whole model
     gmsh.option.setNumber("Mesh.CharacteristicLengthMax", 0.2)
     gmsh.model.mesh.generate(msh_dim)
 
     if GUI_msh:
-        # Launch the GUI to see the results:
-        # Optionally, run the GUI to visualize
         gmsh.fltk.run()
 
     if save_msh:
         gmsh.write(filename)
+
+    # Save one .npz per component when running a 2-D mesh
+    if msh_dim == 2 and save_msh and component_surfaces is not None:
+        from .export import save_component_meshes
+        base_path = os.path.splitext(filename)[0]
+        save_component_meshes(component_surfaces, base_path, save_ply=save_ply)
 
     # Finalize GMSH
     gmsh.finalize()
@@ -370,6 +393,42 @@ For "Dot_2" (shape: "rectangle"), the `x` and `y` coordinates denote the lower-l
 - `width`: The width of the rectangle (float).
 - `height`: The height of the rectangle (float).
 
+#### Deposits (Dots on Dots):
+
+Any flat (untilted) dot can itself act as a substrate by adding a `deposits` key whose value is a nested `input_dict` with the same structure. Deposits are coplanar with their parent dot; the parent surface is automatically perforated where each deposit sits, exactly as the DiMES head is perforated for top-level dots.
+
+Deposits can be nested to arbitrary depth. Tilted dots (`theta_dot != 0`) cannot carry deposits; attempting this raises an exception.
+
+```
+
+Names = ["Dot_1", "Dot_2", "Dot_1a"]
+
+input_dict = {
+    Names[0]: {
+        "shape": "circle",
+        "x": 0,
+        "y": 0,
+        "radius": 0.5,
+        "deposits": {
+            Names[2]: {
+                "shape": "circle",
+                "x": 0,
+                "y": 0,
+                "radius": 0.1   # sits inside Dot_1; Dot_1 surface gets a hole here
+            }
+        }
+    },
+    Names[1]: {
+        "shape": "rectangle",
+        "x": -0.5,
+        "y": -0.25,
+        "width": 1,
+        "height": 0.5
+    }
+}
+
+```
+
 #### Rotation:
 
 The entire DiMES top surface and dots can be rotated by an angle `theta_dimes` (in degrees) relative to a direction defined by the unit vector components:
@@ -423,15 +482,15 @@ Before generating the mesh, users can configure several options:
     geo_specific_keys = ['input_dict', 'l_radial', 'l_toroidal', 'l_vertical', 'x_center_dimes',
                          'y_center_dimes', 'z_top_dimes', 'r_dimes', 'ax', 'ay', 'az', 'theta_dimes', 'no_dots']
     mesh_specific_keys = ['filename', 'save_msh',
-                          'GUI_geo', 'GUI_msh', 'msh_dim']
+                          'GUI_geo', 'GUI_msh', 'msh_dim', 'save_ply']
 
     kw_geo = {key: value for key,
               value in kwargs.items() if key in geo_specific_keys}
     kw_msh = {key: value for key,
               value in kwargs.items() if key in mesh_specific_keys}
 
-    make_dimes_geom(input_dict, **kw_geo)
-    make_dimes_mesh(**kw_msh)
+    _, component_surfaces = make_dimes_geom(input_dict, **kw_geo)
+    make_dimes_mesh(component_surfaces=component_surfaces, **kw_msh)
 
     try:
         gmsh.finalize()
