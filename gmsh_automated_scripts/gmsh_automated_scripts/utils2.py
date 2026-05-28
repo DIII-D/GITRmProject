@@ -216,7 +216,8 @@ def make_dimes_geom(input_dict, l_radial=8, l_toroidal=8, l_vertical=8,
 
 
 def make_dimes_mesh(filename="test.msh", save_msh=False, GUI_geo=False, GUI_msh=True,
-                    msh_dim=3, component_surfaces=None, save_ply=False):
+                    msh_dim=3, component_surfaces=None, save_npz=None, save_ply=False,
+                    ply_normals=True, ply_ascii=False):
     # %% Generate the mesh and visualize the result
 
     # Remove duplicates (coherence)
@@ -249,11 +250,15 @@ def make_dimes_mesh(filename="test.msh", save_msh=False, GUI_geo=False, GUI_msh=
     if save_msh:
         gmsh.write(filename)
 
-    # Save one .npz per component when running a 2-D mesh
-    if msh_dim == 2 and save_msh and component_surfaces is not None:
+    # save_npz=None means "follow save_msh"; explicit True/False overrides
+    _save_npz = save_msh if save_npz is None else save_npz
+
+    # Save per-component files for 2-D meshes (independent of save_msh)
+    if msh_dim == 2 and (_save_npz or save_ply) and component_surfaces is not None:
         from .export import save_component_meshes
         base_path = os.path.splitext(filename)[0]
-        save_component_meshes(component_surfaces, base_path, save_ply=save_ply)
+        save_component_meshes(component_surfaces, base_path, save_npz=_save_npz, save_ply=save_ply,
+                              ply_normals=ply_normals, ply_ascii=ply_ascii)
 
     # Finalize GMSH
     gmsh.finalize()
@@ -337,6 +342,7 @@ On the DiMES top surface, dots represent the material coatings. Two geometries a
 
 - circle
 - rectangle
+- annulus
 
 Each dot's position and dimensions are specified within an `input_dict` dictionary. The user must manually create this dictionary, where each dot is defined by a unique label followed by values that describe its geometry, shape, and position.
 
@@ -392,6 +398,16 @@ For "Dot_2" (shape: "rectangle"), the `x` and `y` coordinates denote the lower-l
 
 - `width`: The width of the rectangle (float).
 - `height`: The height of the rectangle (float).
+
+For an annulus (shape: "annulus"), all parameters are:
+
+- `x`: X-coordinate of the annulus centre (float).
+- `y`: Y-coordinate of the annulus centre (float).
+- `r_inner`: Inner radius (float, must be < `r_outer`).
+- `r_outer`: Outer radius (float).
+- `phi_start`: Start angle in degrees measured from the +X axis (float, default 0).
+- `phi_end`: End angle in degrees measured from the +X axis (float, optional). When provided, takes priority over `angle`.
+- `angle`: Angular extent of the sector in degrees (float, default 360 = full annulus). Ignored when `phi_end` is set.
 
 #### Deposits (Dots on Dots):
 
@@ -482,7 +498,8 @@ Before generating the mesh, users can configure several options:
     geo_specific_keys = ['input_dict', 'l_radial', 'l_toroidal', 'l_vertical', 'x_center_dimes',
                          'y_center_dimes', 'z_top_dimes', 'r_dimes', 'ax', 'ay', 'az', 'theta_dimes', 'no_dots']
     mesh_specific_keys = ['filename', 'save_msh',
-                          'GUI_geo', 'GUI_msh', 'msh_dim', 'save_ply']
+                          'GUI_geo', 'GUI_msh', 'msh_dim', 'save_npz', 'save_ply',
+                          'ply_normals', 'ply_ascii']
 
     kw_geo = {key: value for key,
               value in kwargs.items() if key in geo_specific_keys}

@@ -32,8 +32,34 @@ def extract_surface_mesh(surf_tag):
     return nodes_xyz, triangles
 
 
-def write_ply(path, nodes, triangles):
-    """Write a binary little-endian PLY file (no extra dependencies required).
+def compute_vertex_normals(nodes, triangles):
+    """Compute per-vertex normals as the area-weighted average of adjacent face normals.
+
+    Parameters
+    ----------
+    nodes : (N, 3) float array
+    triangles : (M, 3) int array
+
+    Returns
+    -------
+    normals : (N, 3) float64 array, unit-length per vertex.
+    """
+    v0 = nodes[triangles[:, 0]]
+    v1 = nodes[triangles[:, 1]]
+    v2 = nodes[triangles[:, 2]]
+    face_normals = np.cross(v1 - v0, v2 - v0)  # magnitude proportional to face area
+
+    vertex_normals = np.zeros_like(nodes, dtype=np.float64)
+    for i in range(3):
+        np.add.at(vertex_normals, triangles[:, i], face_normals)
+
+    norms = np.linalg.norm(vertex_normals, axis=1, keepdims=True)
+    norms[norms == 0] = 1.0
+    return vertex_normals / norms
+
+
+def write_ply(path, nodes, triangles, normals=None, ascii_format=False):
+    """Write a PLY file, binary little-endian by default.
 
     Parameters
     ----------
@@ -43,34 +69,66 @@ def write_ply(path, nodes, triangles):
         Vertex coordinates.
     triangles : (M, 3) int array
         Triangle vertex indices (0-based).
+    normals : (N, 3) float array or None
+        Per-vertex normals.  If None, normals are omitted.
+    ascii_format : bool
+        Write ASCII format instead of binary little-endian.
     """
     verts = nodes.astype(np.float32)
-    faces = triangles.astype(np.int32)
+    faces = triangles.astype(np.uint32)
+    has_normals = normals is not None
+    norms = normals.astype(np.float32) if has_normals else None
+
+    normal_props = (
+        "property float nx\n"
+        "property float ny\n"
+        "property float nz\n"
+    ) if has_normals else ""
+
+    fmt_line = "format ascii 1.0" if ascii_format else "format binary_little_endian 1.0"
 
     header = (
         "ply\n"
-        "format binary_little_endian 1.0\n"
+        f"{fmt_line}\n"
         f"element vertex {len(verts)}\n"
         "property float x\n"
         "property float y\n"
         "property float z\n"
+        f"{normal_props}"
         f"element face {len(faces)}\n"
-        "property list uchar int vertex_indices\n"
+        "property list uchar uint vertex_indices\n"
         "end_header\n"
-    ).encode("ascii")
+    )
 
-    # face data: each row is  [3, i0, i1, i2]  (count byte + 3 int32s)
-    counts = np.full((len(faces), 1), 3, dtype=np.uint8)
-    face_data = np.hstack([counts.view(np.uint8),
-                           faces.view(np.uint8).reshape(len(faces), 12)])
+    if ascii_format:
+        with open(path, "w") as f:
+            f.write(header)
+            for i, v in enumerate(verts):
+                line = f"{v[0]} {v[1]} {v[2]}"
+                if has_normals:
+                    n = norms[i]
+                    line += f" {n[0]} {n[1]} {n[2]}"
+                f.write(line + "\n")
+            for tri in faces:
+                f.write(f"3 {tri[0]} {tri[1]} {tri[2]}\n")
+    else:
+        vert_data = np.hstack([verts, norms]) if has_normals else verts
 
-    with open(path, "wb") as f:
-        f.write(header)
-        f.write(verts.tobytes())
-        f.write(face_data.tobytes())
+        # face buffer: 1 uint8 (count=3) + 3 uint32s = 13 bytes per face
+        n_faces = len(faces)
+        face_buf = np.empty(n_faces * 13, dtype=np.uint8)
+        face_view = face_buf.reshape(n_faces, 13)
+        face_view[:, 0] = 3
+        face_view[:, 1:] = faces.view(np.uint8).reshape(n_faces, 12)
+
+        with open(path, "wb") as f:
+            f.write(header.encode("ascii"))
+            f.write(vert_data.tobytes())
+            f.write(face_buf.tobytes())
 
 
-def save_component_meshes(component_surfaces, base_path, save_ply=False):
+def save_component_meshes(component_surfaces, base_path, save_npz=True, save_ply=False,
+                          ply_normals=True, ply_ascii=False):
     """Save one .npz (and optionally one .ply) per component.
 
     Parameters
@@ -80,8 +138,14 @@ def save_component_meshes(component_surfaces, base_path, save_ply=False):
     base_path : str
         Path prefix without extension, e.g. "/path/to/DiMES_3D".
         Output files are written as  <base_path>_<name>.npz / .ply.
+    save_npz : bool
+        Write a numpy .npz file for each component (default True).
     save_ply : bool
-        Also write a binary PLY file for each component (default False).
+        Write a PLY file for each component (default False).
+    ply_normals : bool
+        Include per-vertex normals in PLY output (default True).
+    ply_ascii : bool
+        Write PLY in ASCII format instead of binary little-endian (default False).
     """
     for name, surf_tags in component_surfaces.items():
         all_nodes = []
@@ -106,14 +170,19 @@ def save_component_meshes(component_surfaces, base_path, save_ply=False):
         tris_out = (np.vstack(all_tris) if all_tris
                     else np.empty((0, 3), dtype=np.int64))
 
-        npz_path = f"{base_path}_{name}.npz"
-        np.savez(npz_path, nodes=nodes_out, triangles=tris_out)
+        saved = []
 
-        extra = ""
+        if save_npz:
+            npz_path = f"{base_path}_{name}.npz"
+            np.savez(npz_path, nodes=nodes_out, triangles=tris_out)
+            saved.append(npz_path)
+
         if save_ply and len(tris_out) > 0:
             ply_path = f"{base_path}_{name}.ply"
-            write_ply(ply_path, nodes_out, tris_out)
-            extra = f"  +  {ply_path}"
+            normals_out = compute_vertex_normals(nodes_out, tris_out) if ply_normals else None
+            write_ply(ply_path, nodes_out, tris_out, normals=normals_out, ascii_format=ply_ascii)
+            saved.append(ply_path)
 
-        print(f"  saved {name:30s}  {len(nodes_out):6d} nodes  "
-              f"{len(tris_out):6d} triangles  →  {npz_path}{extra}")
+        if saved:
+            print(f"  saved {name:30s}  {len(nodes_out):6d} nodes  "
+                  f"{len(tris_out):6d} triangles  →  {',  '.join(saved)}")

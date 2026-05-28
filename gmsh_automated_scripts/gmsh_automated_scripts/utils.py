@@ -300,5 +300,84 @@ def create_loops(input_dict, z_dimes, volumes_surfaces, dot_loops, ax, ay, az, t
                 component_surfaces[name] = [dot_base_surface]
                 component_surfaces.update(child_surfaces)
 
+        elif elem_def["shape"] == "annulus":
+
+            x         = elem_def['x']
+            y         = elem_def['y']
+            r_inner   = elem_def['r_inner']
+            r_outer   = elem_def['r_outer']
+            phi_start = elem_def.get('phi_start', 0.)
+            if 'phi_end' in elem_def:
+                angle = elem_def['phi_end'] - phi_start
+            else:
+                angle = elem_def.get('angle', 360.)
+            theta_dot = theta_dimes + math.pi / 180 * elem_def.get('theta_dot', 0)
+
+            if not (0 < angle <= 360):
+                raise Exception(f"angle must be in (0, 360], got {angle}")
+            if r_inner >= r_outer:
+                raise Exception(f"r_inner ({r_inner}) must be less than r_outer ({r_outer})")
+            if theta_dot > theta_dimes:
+                raise Exception("Tilted annuli (theta_dot != 0) are not supported")
+
+            z        = z_on_tilted_surface(z_dimes, x, y, ax, ay, theta_dimes)
+            r1_outer = r_outer / math.cos(theta_dimes)
+            r1_inner = r_inner / math.cos(theta_dimes)
+
+            child_loops    = []
+            child_surfaces = {}
+            if "deposits" in elem_def and elem_def["deposits"]:
+                child_surfaces = create_loops(elem_def["deposits"], z_dimes, volumes_surfaces,
+                                              child_loops, ax, ay, az, theta_dimes)
+
+            if abs(angle - 360.) < 1e-9:
+                outer_curve = gmsh.model.occ.addEllipse(x, y, z, r1_outer, r_outer)
+                inner_curve = gmsh.model.occ.addEllipse(x, y, z, r1_inner, r_inner)
+                if ax != 0:
+                    gmsh.model.occ.rotate([(1, outer_curve), (1, inner_curve)],
+                                          x, y, z, 0, 0, 1, math.pi / 2)
+                gmsh.model.occ.rotate([(1, outer_curve), (1, inner_curve)],
+                                      x, y, z, ax, ay, az, theta_dimes)
+                outer_loop = gmsh.model.occ.addCurveLoop([outer_curve])
+                inner_loop = gmsh.model.occ.addCurveLoop([inner_curve])
+                annulus_surface = gmsh.model.occ.addPlaneSurface(
+                    [outer_loop, inner_loop] + child_loops)
+                dot_loops.append(outer_loop)
+
+            else:
+                phi1 = math.radians(phi_start)
+                phi2 = phi1 + math.radians(angle)
+                c1, s1 = math.cos(phi1), math.sin(phi1)
+                c2, s2 = math.cos(phi2), math.sin(phi2)
+
+                p_o1 = gmsh.model.occ.addPoint(x + r1_outer * c1, y + r_outer * s1, z)
+                p_o2 = gmsh.model.occ.addPoint(x + r1_outer * c2, y + r_outer * s2, z)
+                p_i1 = gmsh.model.occ.addPoint(x + r1_inner * c1, y + r_inner * s1, z)
+                p_i2 = gmsh.model.occ.addPoint(x + r1_inner * c2, y + r_inner * s2, z)
+
+                outer_arc = gmsh.model.occ.addEllipse(x, y, z, r1_outer, r_outer,
+                                                      angle1=phi1, angle2=phi2)
+                inner_arc = gmsh.model.occ.addEllipse(x, y, z, r1_inner, r_inner,
+                                                      angle1=phi1, angle2=phi2)
+                line_end   = gmsh.model.occ.addLine(p_o2, p_i2)
+                line_start = gmsh.model.occ.addLine(p_i1, p_o1)
+
+                all_ents = [(1, outer_arc), (1, inner_arc), (1, line_end), (1, line_start),
+                            (0, p_o1), (0, p_o2), (0, p_i1), (0, p_i2)]
+                if ax != 0:
+                    gmsh.model.occ.rotate(all_ents, x, y, z, 0, 0, 1, math.pi / 2)
+                gmsh.model.occ.rotate(all_ents, x, y, z, ax, ay, az, theta_dimes)
+                gmsh.model.occ.synchronize()
+
+                sector_loop = gmsh.model.occ.addCurveLoop(
+                    [outer_arc, line_end, -inner_arc, line_start])
+                annulus_surface = gmsh.model.occ.addPlaneSurface(
+                    [sector_loop] + child_loops)
+                dot_loops.append(sector_loop)
+
+            volumes_surfaces.append(annulus_surface)
+            component_surfaces[name] = [annulus_surface]
+            component_surfaces.update(child_surfaces)
+
     return component_surfaces
 
