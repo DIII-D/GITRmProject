@@ -9,12 +9,86 @@ import os
 import gmsh
 import math
 from .utils import rectangle_def, create_loops
+from dataclasses import dataclass
+from typing import Union
 
+@dataclass
+class Cube:
+    L_R: float      # radial length
+    L_phi: float    # toroidal length
+    L_Z: float      # z-axis length
+    center: list[float]  # [R, phi, Z]
 
-def make_dimes_geom(input_dict, l_radial=8, l_toroidal=8, l_vertical=8,
-                    x_center=0, y_center=0, z_center=0,
-                    x_center_dimes=0, y_center_dimes=0, z_top_dimes=0, r_dimes=2.5,
-                    ax=0, ay=-1, az=0, theta_dimes=0, no_dots=False):
+    def __post_init__(self): # dataclass calls __post_init__ automatically right after construction
+        self.check_input()
+
+    def scale_size(self, scale: float) -> None:
+        self.L_R *= scale
+        self.L_phi *= scale
+        self.L_Z *= scale
+        return self
+
+    def check_input(self) -> None:
+        if len(self.center) != 3:
+            raise ValueError("len(self.center) must be equal to 3")
+        if (self.L_R <= 0.) or (self.L_phi <= 0.) or (self.L_Z <= 0.):
+            raise ValueError("One of the cube dimensions is less than or equal to zero")
+
+@dataclass
+class Disk:
+    r : float # radius length
+    center: list[float] # [R, phi, Z]
+
+    def scale_size(self, scale: float) -> None:
+        self.r *= scale
+        return self
+
+    def __post_init__(self): # dataclass calls __post_init__ automatically right after construction
+        self.check_input()
+
+    def check_input(self) -> None:
+        if len(self.center) != 3:
+            raise ValueError("len(self.center) must be equal to 3")
+        if self.r <= 0.:
+            raise ValueError("Disk radius must be greater than 0")
+
+@dataclass
+class Annulus:
+    r_minor: float
+    r_major: float
+    angular_sector: tuple
+    center: list[float] # [R, phi, Z]
+
+    def scale_size(self, scale: float) -> None:
+        self.r_minor *= scale
+        self.r_major *= scale
+        return self
+
+    def __post_init__(self): # dataclass calls __post_init__ automatically right after construction
+        self.check_input()
+
+    def check_input(self) -> None:
+        if len(self.center) != 3:
+            raise ValueError("len(self.center) must be equal to 3")
+        if (self.r_minor <= 0.):
+            raise ValueError("Annulus r_minor must be greater than 0")
+        if (self.r_major <= 0.):
+            raise ValueError("Annulus r_major must be greater than 0")
+        if (self.angular_sector[0] >= self.angular_sector[1]):
+            raise ValueError("Annulus angular sector final angle must be smaller than the first angle.")
+
+@dataclass
+class Samples:
+    items: list[Union[Cube, Disk, Annulus]]
+
+def make_dimes_geom(input_dict, L_R=8, L_phi=8, L_Z=8, box_center = [0.,0.,0.],
+                    r_dimes = 2.5, dimes_center = [0., 0., 0.],
+                    ax=0, ay=-1, az=0, theta_dimes=0, no_dots=False, scale = 1.):
+    
+    boxCube = Cube(L_R, L_phi, L_Z, box_center).scale_size(scale)
+    DiMESTop = Disk(r_dimes, dimes_center).scale_size(scale)
+
+    print(f"type(boxCube) = {type(boxCube)}")
 
     # convert deg to rad
     theta_dimes = math.pi / 180 * theta_dimes
@@ -36,27 +110,19 @@ def make_dimes_geom(input_dict, l_radial=8, l_toroidal=8, l_vertical=8,
 
     """ Plasma volume geometry """
     # Cartesian coordinates of bottom plasma volume surface lower left corner
+    
+    # boxCube: coordinates of lower left vertex
+    R_ll = -boxCube.L_R / 2 + boxCube.center[0]  # radial
+    phi_ll = -boxCube.L_phi / 2 + boxCube.center[1]  # toroidal
+    z_ll = boxCube.center[2]  # vertical
 
-    x_plasma_volume_ll = -l_radial / 2 + x_center  # toroidal
-    y_plasma_volume_ll = -l_toroidal / 2 + y_center  # radial
-    z_plasma_volume_ll = z_center  # vertical
+    # Create a recangular curve loop for box base
+    p1, p2, p3, p4, l1, l2, l3, l4, base_rectangle_loop = \
+        rectangle_def(R_ll, phi_ll, z_ll, boxCube.L_R, boxCube.L_phi)
 
-    # Width and height of plasma volume base surface
-    width = l_radial
-    height = l_toroidal
-    # This variable is defined but not used in this surface creation
-    dz_plasma_volume = l_vertical
-
-    # Create a curve loop for plasma volume base
-    p1, p2, p3, p4, l1, l2, l3, l4, plasma_base_rectangle_loop = \
-        rectangle_def(x_plasma_volume_ll, y_plasma_volume_ll,
-                      z_plasma_volume_ll, width, height)
-
-    # Create a curve loop for plasma_volume top
-
-    p5, p6, p7, p8, l5, l6, l7, l8, plasma_top_rectangle_loop = \
-        rectangle_def(x_plasma_volume_ll, y_plasma_volume_ll,
-                      z_plasma_volume_ll + dz_plasma_volume, width, height)
+    # Create a rectangular curve loop for box top
+    p5, p6, p7, p8, l5, l6, l7, l8, top_rectangle_loop = \
+        rectangle_def(R_ll, phi_ll, z_ll + boxCube.L_Z, boxCube.L_R, boxCube.L_phi)
 
     # Create vertical lines connecting bottom and top
     l9 = gmsh.model.occ.addLine(p1, p5)
@@ -69,27 +135,27 @@ def make_dimes_geom(input_dict, l_radial=8, l_toroidal=8, l_vertical=8,
 
     # Create surfaces for the sides (lateral surfaces)
     # minus when instead of going for extremity A to B you go from B to A close a loop
-    plasma_side1 = gmsh.model.occ.addPlaneSurface(
+    box_side1 = gmsh.model.occ.addPlaneSurface(
         [gmsh.model.occ.addCurveLoop([l1, l10, -l5, -l9])])
-    plasma_side2 = gmsh.model.occ.addPlaneSurface(
+    box_side2 = gmsh.model.occ.addPlaneSurface(
         [gmsh.model.occ.addCurveLoop([l2, l11, -l6, -l10])])
-    plasma_side3 = gmsh.model.occ.addPlaneSurface(
+    box_side3 = gmsh.model.occ.addPlaneSurface(
         [gmsh.model.occ.addCurveLoop([l3, l12, -l7, -l11])])
-    plasma_side4 = gmsh.model.occ.addPlaneSurface(
+    box_side4 = gmsh.model.occ.addPlaneSurface(
         [gmsh.model.occ.addCurveLoop([l4, l9, -l8, -l12])])
 
     # store surfaces enclosing volume in a variable
-    volumes_surfaces.append(plasma_side1)
-    volumes_surfaces.append(plasma_side2)
-    volumes_surfaces.append(plasma_side3)
-    volumes_surfaces.append(plasma_side4)
+    volumes_surfaces.append(box_side1)
+    volumes_surfaces.append(box_side2)
+    volumes_surfaces.append(box_side3)
+    volumes_surfaces.append(box_side4)
 
     # Create the top surface
-    plasma_top = gmsh.model.occ.addPlaneSurface(
+    box_top_surface = gmsh.model.occ.addPlaneSurface(
         [gmsh.model.occ.addCurveLoop([l5, l6, l7, l8])])
 
     # store surfaces enclosing volume in a variable
-    volumes_surfaces.append(plasma_top)
+    volumes_surfaces.append(box_top_surface)
 
     # Synchronize the GMSH model
     gmsh.model.occ.synchronize()
@@ -97,37 +163,35 @@ def make_dimes_geom(input_dict, l_radial=8, l_toroidal=8, l_vertical=8,
     # %%
     """ DiMES geometry """
         
-    DiMES_base_circle = gmsh.model.occ.addCircle(
-        x_center_dimes, y_center_dimes, z_center, r_dimes)
-    
-    # if you want to rotate the DiMES head around the x-axis, since the ellipse must
-    # be turned before around the z-axis of 90 deg so that the major radius is along the y-axis
-    # also the circle must be rotated otherwise the addThruSection function won't work properly
+    DiMES_base_circle = gmsh.model.occ.addCircle(*DiMESTop.center, DiMESTop.r)
+
+    # if you want to rotate the DiMES head around the x-axis, the ellipse must
+    # be turned before around the z-axis of 90 deg so that the major radius is along the y-axis.
+    # The circle must be rotated as well otherwise the addThruSection function won't work properly
     # when you want to create the side surface of DiMES
     
     if ax != 0:
-        gmsh.model.occ.rotate([(1, DiMES_base_circle)], x_center_dimes,
-                              y_center_dimes, z_top_dimes, 0, 0, 1, math.pi / 2)
+        gmsh.model.occ.rotate([(1, DiMES_base_circle)], *DiMESTop.center, 0, 0, 1, math.pi / 2)
 
     DiMES_base_circle_loop = gmsh.model.occ.addCurveLoop([DiMES_base_circle])
 
-    plasma_base = gmsh.model.occ.addPlaneSurface(
-        [plasma_base_rectangle_loop, DiMES_base_circle_loop])
+    box_base_surface = gmsh.model.occ.addPlaneSurface(
+        [base_rectangle_loop, DiMES_base_circle_loop])
 
     # store surfaces enclosing volume in a variable
-    volumes_surfaces.append(plasma_base)
+    volumes_surfaces.append(box_base_surface)
 
     if theta_dimes != 0:
         
         # translate along z to avoid overlapping with base surface
-        delta_z_dimes = r_dimes * math.tan(theta_dimes)         
-        z_top_dimes += delta_z_dimes + 0.001 # to avoid overlapping facets from different surfaces
-
-        r1 = r_dimes / math.cos(theta_dimes)  # major radius
-        r2 = r_dimes  # minor radius (r1 >= r2)
+        delta_z_dimes = DiMESTop.r * math.tan(theta_dimes)         
+        DiMESTop.center[2] += delta_z_dimes + 0.001*scale # + 0.001*scale to avoid overlapping facets from different surfaces
         
-        top_ellipse = gmsh.model.occ.addEllipse(
-            x_center_dimes, y_center_dimes, z_top_dimes, r1, r2)
+        # once tilted, the disk perimeter turns from a circle into an ellipse
+        r_major = r_dimes / math.cos(theta_dimes)  # major radius
+        r_minor = r_dimes  # minor radius (r1 >= r2)
+        
+        top_ellipse = gmsh.model.occ.addEllipse(*DiMESTop.center, r_major, r_minor)
         
         # addEllipse only creates ellipses with major radius along x-axis
         
@@ -135,14 +199,11 @@ def make_dimes_geom(input_dict, l_radial=8, l_toroidal=8, l_vertical=8,
         # be turned before around the z-axis of 90 deg so that the major radius is along the y-axis
         
         if ax != 0:
-            gmsh.model.occ.rotate([(1, top_ellipse)], x_center_dimes,
-                                  y_center_dimes, z_top_dimes, 0, 0, 1, math.pi / 2)
+            gmsh.model.occ.rotate([(1, top_ellipse)], *DiMESTop.center, 0, 0, 1, math.pi / 2)
             
 
         # rotate about rotation axis about an angle equal to theta_dimes 
-        
-        gmsh.model.occ.rotate([(1, top_ellipse)], x_center_dimes,
-                              y_center_dimes, z_top_dimes, ax, ay, az, theta_dimes)
+        gmsh.model.occ.rotate([(1, top_ellipse)], *DiMESTop.center, ax, ay, az, theta_dimes)
         
         top_ellipse_loop = gmsh.model.occ.addCurveLoop([top_ellipse])
 
@@ -180,7 +241,7 @@ def make_dimes_geom(input_dict, l_radial=8, l_toroidal=8, l_vertical=8,
     if no_dots:
         pass
     else:
-        dot_component_surfaces = create_loops(input_dict, z_top_dimes, volumes_surfaces,
+        dot_component_surfaces = create_loops(input_dict, DiMESTop.center[2], volumes_surfaces,
                                               dot_loops, ax, ay, az, theta_dimes)
 
     # Generate DiMES top surface
@@ -196,13 +257,13 @@ def make_dimes_geom(input_dict, l_radial=8, l_toroidal=8, l_vertical=8,
 
     # build component surface map (name → list of OCC surface tags)
     component_surfaces = {
-        "plasma_side_1": [plasma_side1],
-        "plasma_side_2": [plasma_side2],
-        "plasma_side_3": [plasma_side3],
-        "plasma_side_4": [plasma_side4],
-        "plasma_top":    [plasma_top],
-        "plasma_base":   [plasma_base],
-        "DiMES_top":     [DiMES_top_surface],
+        "box_side1": [box_side1],
+        "box_side2": [box_side2],
+        "box_side3": [box_side3],
+        "box_side4": [box_side4],
+        "box_top": [box_top_surface],
+        "box_base": [box_base_surface],
+        "DiMES_top": [DiMES_top_surface]
     }
     if theta_dimes != 0:
         component_surfaces["DiMES_side"] = [DiMES_side_surface_id]
@@ -216,8 +277,8 @@ def make_dimes_geom(input_dict, l_radial=8, l_toroidal=8, l_vertical=8,
 
 
 def make_dimes_mesh(filename="test.msh", save_msh=False, GUI_geo=False, GUI_msh=True,
-                    msh_dim=3, component_surfaces=None, save_npz=None, save_ply=False,
-                    ply_normals=True, ply_ascii=False):
+                    msh_dim=3, component_surfaces=None, save_output = False, save_npz=None, save_ply=False,
+                    ply_normals=True, ply_ascii=True):
     # %% Generate the mesh and visualize the result
 
     # Remove duplicates (coherence)
@@ -234,7 +295,8 @@ def make_dimes_mesh(filename="test.msh", save_msh=False, GUI_geo=False, GUI_msh=
 
     if GUI_geo:
         gmsh.fltk.run()
-
+    
+    # meshing options
     gmsh.option.setNumber("Mesh.MeshSizeFromCurvature", 1)
     gmsh.option.setNumber("Mesh.MinimumElementsPerTwoPi", 20)
 
@@ -244,9 +306,11 @@ def make_dimes_mesh(filename="test.msh", save_msh=False, GUI_geo=False, GUI_msh=
     gmsh.option.setNumber("Mesh.CharacteristicLengthMax", 0.2)
     gmsh.model.mesh.generate(msh_dim)
 
+    # run GUI
     if GUI_msh:
         gmsh.fltk.run()
 
+    # save .msh file 
     if save_msh:
         gmsh.write(filename)
 
@@ -254,7 +318,7 @@ def make_dimes_mesh(filename="test.msh", save_msh=False, GUI_geo=False, GUI_msh=
     _save_npz = save_msh if save_npz is None else save_npz
 
     # Save per-component files for 2-D meshes (independent of save_msh)
-    if msh_dim == 2 and (_save_npz or save_ply) and component_surfaces is not None:
+    if msh_dim == 2 and (_save_npz or save_ply) and save_output and component_surfaces is not None:
         from .export import save_component_meshes
         base_path = os.path.splitext(filename)[0]
         save_component_meshes(component_surfaces, base_path, save_npz=_save_npz, save_ply=save_ply,
@@ -267,8 +331,11 @@ def make_dimes_mesh(filename="test.msh", save_msh=False, GUI_geo=False, GUI_msh=
 # %%
 """ function """
 
+def generate_dimes_mesh(Box: Cube, DiMESTop: Disk, samples : Samples):
+    return
 
-def generate_dimes_mesh(input_dict, **kwargs):
+
+def generate_dimes_mesh_legacy(input_dict, **kwargs):
     """
 This function automatically generates the DiMES mesh for a given set of dot geometries.
 
@@ -285,9 +352,9 @@ This function automatically generates the DiMES mesh for a given set of dot geom
   - x_center: The X-coordinate of the plasma volume base surface center (float, default: 0).
   - y_center: The Y-coordinate of the plasma volume base surface center (float, default: 0).
   - z_center: The Z-coordinate of the plasma volume base surface center (float, default: 0).
-  - l_radial: The extent of plasma volume in the radial direction (half-length, float, default: 8).
-  - l_toroidal: The extent of plasma volume in the toroidal direction (half-length, float, default: 8).
-  - l_vertical: The extentof plasma volume  in the vertical direction (float, default: 8).
+  - L_R: The extent of plasma volume in the radial direction (half-length, float, default: 8).
+  - L_phi: The extent of plasma volume in the toroidal direction (half-length, float, default: 8).
+  - L_Z: The extentof plasma volume  in the vertical direction (float, default: 8).
   - ax: The X-component of the rotation axis (float, default: 0).
   - ay: The Y-component of the rotation axis (float, default: -1).
   - az: The Z-component of the rotation axis (float, default: 0).
@@ -332,9 +399,9 @@ The DiMES geometry is enclosed within a volume known as `plasma_volume`, represe
 
 The plasma volume extends symmetrically in these directions:
 
-- `l_radial`: Twice the radial extent of the volume (float).
-- `l_toroidal`: Twice the toroidal extent of the volume (float).
-- `l_vertical`: The vertical extent of the volume (float).
+- `L_R`: Twice the radial extent of the volume (float).
+- `L_phi`: Twice the toroidal extent of the volume (float).
+- `L_Z`: The vertical extent of the volume (float).
 
 #### Dots (Material Coatings):
 
@@ -495,9 +562,9 @@ Before generating the mesh, users can configure several options:
         gmsh.initialize()
 
     # Defining keys specific to geometry and mesh
-    geo_specific_keys = ['input_dict', 'l_radial', 'l_toroidal', 'l_vertical', 'x_center_dimes',
+    geo_specific_keys = ['input_dict', 'L_R', 'L_phi', 'L_Z', 'x_center_dimes',
                          'y_center_dimes', 'z_top_dimes', 'r_dimes', 'ax', 'ay', 'az', 'theta_dimes', 'no_dots']
-    mesh_specific_keys = ['filename', 'save_msh',
+    mesh_specific_keys = ['filename', 'save_msh', 'save_output', 'scale'
                           'GUI_geo', 'GUI_msh', 'msh_dim', 'save_npz', 'save_ply',
                           'ply_normals', 'ply_ascii']
 
