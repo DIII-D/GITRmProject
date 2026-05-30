@@ -106,6 +106,16 @@ class Annulus:
         if (self.angular_sector[0] >= self.angular_sector[1]):
             raise ValueError("Annulus angular sector final angle must be smaller than the first angle.")
 
+# Type alias for a single shape or list of shapes
+Shape = Union[Rectangle, Disk, Annulus, Cube]
+ShapeOrList = Union[Shape, list[Shape]]
+
+@dataclass
+class Object2D:
+    shape: ShapeOrList
+    label: Union[str, list[str]]
+    surface_tag: Union[int, list[int], None] = None
+
 @dataclass
 class MeshConfig:
     """All mesh-generation settings in one validated place.
@@ -396,76 +406,81 @@ def make_dimes_mesh(mesh: MeshConfig = None, filename="test.msh", save_msh=False
 
 gmsh.initialize()
 
-L_tile = 10.
+L_tile = 6.
 
-Tile = Rectangle(L_tile,L_tile,[-L_tile/2,-L_tile/2, 0.])
+Tile = Object2D(Rectangle(L_tile, L_tile, [-L_tile/2, -L_tile/2, 0.]), label="tile")
 
-*_, tile_loop = rectangle_loop(*Tile.ll, Tile.width, Tile.height) 
+*_, tile_loop = rectangle_loop(*Tile.shape.ll, Tile.shape.width, Tile.shape.height)
 
-# 1. create DiMES top surface as truncated cylinder
+# 1. Create DiMES top surface as truncated cylinder
 
-# 1.1 create Ellipse
-
-DimesTop = Disk(4., [0.,0.,0.])
-rot_axis = [0.,-1.,0.]
+# label is a list because DiMES contributes two named surfaces: top and side
+dimes = Object2D(shape=Disk(2.5, [0., 0., 0.]), label=["dimes_top", "dimes_side"])
+rot_axis = [0., -1., 0.]
 angle = np.deg2rad(5)
 
-curve = truncated_cylinder_Ellipse(*DimesTop.center, DimesTop.r, rot_axis[0], rot_axis[1], angle)
+curve = truncated_cylinder_Ellipse(*dimes.shape.center, dimes.shape.r, rot_axis[0], rot_axis[1], angle)
 dimes_outer_loop = gmsh.model.occ.addCurveLoop([curve])
 
-# 1.3 create DiMES hole and tile surface
+# 1.1 Create tile surface with DiMES hole
 
 tile_surface = gmsh.model.occ.addPlaneSurface([tile_loop, dimes_outer_loop])
+Tile.surface_tag = tile_surface
 
-# 1.4 Create hole loops and surfaces
+# 1.2 Create sample hole loops and surfaces
 
-shapes = [Rectangle(1,1,[-0.5,-0.5, 0.]), Disk(0.5, [-2, 0., 0.]), Annulus(3.3, 3.8, (90, 270), [0., 0., 0.])]
+shapes = [Rectangle(1.2, 1.2, [0, -0.6, 0.]), Disk(0.3, [-1, 0., 0.]), Annulus(2.1, 2.48, (90, 270), [0., 0., 0.])]
+labels = ["WEST_sample", "W_std_button", "W_coating"]
 
-inner_loops, inner_surfaces = [], []
-for shape in shapes:
+inner_loops, samples = [], []
+for shape, label in zip(shapes, labels):
     loop, surface = add_sample(shape)
     inner_loops.append(loop)
-    inner_surfaces.append(surface)
+    obj = Object2D(shape=shape, label=label)
+    obj.surface_tag = surface
+    samples.append(obj)
 
-# 1.5 Create surface with holes
+# 1.3 Create DiMES top surface with holes
 dimes_top_surface = gmsh.model.occ.addPlaneSurface([dimes_outer_loop] + inner_loops)
 
-# 1.6 Rotate surfaces
+# 1.4 Rotate surfaces
 if angle != 0.:
     ax, ay, az = rot_axis
-    cx, cy, cz = DimesTop.center
+    cx, cy, cz = dimes.shape.center
 
-    all_surfaces = [(2, dimes_top_surface)] + [(2, s) for s in inner_surfaces]
+    all_surfaces = [(2, dimes_top_surface)] + [(2, s.surface_tag) for s in samples]
 
-    gmsh.model.occ.rotate(all_surfaces, cx, cy, cz, ax, ay, az, angle)   # surfaces only
+    gmsh.model.occ.rotate(all_surfaces, cx, cy, cz, ax, ay, az, angle)
     gmsh.model.occ.synchronize()
     _, _, z_min, _, _, _ = gmsh.model.getBoundingBox(2, dimes_top_surface)
     gmsh.model.occ.translate(all_surfaces, 0, 0, cz - z_min)
     gmsh.model.occ.synchronize()
 
-# 1.7 Add DiMES side surface
+# 1.5 Add DiMES side surface
 if angle != 0.:
     dimes_base_loop = gmsh.model.occ.addCurveLoop(
-        [gmsh.model.occ.addCircle(*DimesTop.center, DimesTop.r)]
+        [gmsh.model.occ.addCircle(*dimes.shape.center, dimes.shape.r)]
     )
     result = gmsh.model.occ.addThruSections(
         [dimes_base_loop, dimes_outer_loop], makeSolid=False
     )
     gmsh.model.occ.synchronize()
-    # result is a list of (dim, tag) tuples — extract the surface tag
     dimes_side_surface = result[0][1]
-    print(f"Side surface tag: {dimes_side_surface}")  # verify it's an int
+    print(f"Side surface tag: {dimes_side_surface}")
 
+dimes.surface_tag = [dimes_top_surface, dimes_side_surface]
 
-# mesh = MeshConfig()
-# Add Mesh Options
-
-component_surfaces = {
-    "tile":       [tile_surface],
-    "dimes_top":  [dimes_top_surface],
-    "dimes_side": [dimes_side_surface],   # an int, not a tuple
-    **{f"sample_{i}": [s] for i, s in enumerate(inner_surfaces)}
-}
+# Build component_surfaces from Object2D instances — single source of truth
+all_objects = [Tile, dimes] + samples
+component_surfaces = {}
+for obj in all_objects:
+    if isinstance(obj.label, list):
+        # one Object2D owns multiple named surfaces (e.g. dimes_top / dimes_side)
+        for lbl, tag in zip(obj.label, obj.surface_tag):
+            component_surfaces[lbl] = [tag]
+    else:
+        tags = obj.surface_tag if isinstance(obj.surface_tag, list) else [obj.surface_tag]
+        component_surfaces[obj.label] = tags
 
 make_dimes_mesh(
     mesh=None,
