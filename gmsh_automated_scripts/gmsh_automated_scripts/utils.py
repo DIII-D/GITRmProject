@@ -5,11 +5,165 @@ Created on Tue Oct 15 16:06:17 2024
 
 @author: cappellil
 """
+from .helpers import z_on_tilted_surface
+from .utils2 import Disk, Rectangle, Annulus, MeshConfig
 import gmsh
 import math
 import numpy as np
-from .helpers import z_on_tilted_surface
-from .utils2 import Disk, Rectangle, Annulus
+import os
+from dataclasses import dataclass, field
+from typing import Union, Optional
+
+@dataclass
+class Cube:
+    L_R: float      # radial length
+    L_phi: float    # toroidal length
+    L_Z: float      # z-axis length
+    center: list[float]  # [R, phi, Z]
+
+    def __post_init__(self): # dataclass calls __post_init__ automatically right after construction
+        self.check_input()
+
+    def scale_size(self, scale: float):
+        self.L_R *= scale
+        self.L_phi *= scale
+        self.L_Z *= scale
+        return self
+    
+    def scale_position(self, scale: float):
+        self.center = [c * scale for c in self.center]
+        return self
+
+    def check_input(self) -> None:
+        if len(self.center) != 3:
+            raise ValueError("len(self.center) must be equal to 3")
+        if (self.L_R <= 0.) or (self.L_phi <= 0.) or (self.L_Z <= 0.):
+            raise ValueError("One of the cube dimensions is less than or equal to zero")
+
+@dataclass
+class Disk:
+    r : float # radius length
+    center: list[float] # [R, phi, Z]
+
+    def scale_size(self, scale: float) -> None:
+        self.r *= scale
+        return self
+    
+    def scale_position(self, scale: float):
+        self.center = [c * scale for c in self.center]
+        return self
+
+    def __post_init__(self): # dataclass calls __post_init__ automatically right after construction
+        self.check_input()
+
+    def check_input(self) -> None:
+        if len(self.center) != 3:
+            raise ValueError("len(self.center) must be equal to 3")
+        if self.r <= 0.:
+            raise ValueError("Disk radius must be greater than 0")
+        
+@dataclass
+class Rectangle:
+    width: float
+    height: float
+    ll: list[float] # lower left corner on plane parallel to rectangle
+    
+    def scale_size(self, scale: float) -> None:
+        self.width *= scale
+        self.height *= scale
+        return self
+    
+    def scale_position(self, scale: float):
+        self.center = [c * scale for c in self.center]
+        return self
+
+@dataclass
+class Annulus:
+    r_inner: float
+    r_outer: float
+    angular_sector: tuple
+    center: list[float] # [R, phi, Z]
+
+    def scale_size(self, scale: float) -> None:
+        self.r_inner *= scale
+        self.r_outer *= scale
+        return self
+
+    def scale_position(self, scale: float):
+        self.center = [c * scale for c in self.center]
+        return self
+
+    def __post_init__(self): # dataclass calls __post_init__ automatically right after construction
+        self.check_input()
+
+    def check_input(self) -> None:
+        if len(self.center) != 3:
+            raise ValueError("len(self.center) must be equal to 3")
+        if (self.r_inner <= 0.):
+            raise ValueError("Annulus r_inner must be greater than 0")
+        if (self.r_outer <= 0.):
+            raise ValueError("Annulus r_outer must be greater than 0")
+        if (self.angular_sector[0] >= self.angular_sector[1]):
+            raise ValueError("Annulus angular sector final angle must be smaller than the first angle.")
+
+@dataclass
+class MeshConfig:
+    """All mesh-generation settings in one validated place.
+
+    Apply with .apply() (before generate) or .generate() to apply + mesh.
+    The defaults reproduce the original function's *effective* behaviour, so an
+    existing pipeline meshes identically when called with MeshConfig().
+    """
+    dim: int = 2                          # dimension passed to gmsh.model.mesh.generate()
+
+    # --- element sizing -----------------------------------------------------
+    size_min: float = 0.1                # Mesh.MeshSizeMin (prevents slivers in small dots)
+    size_max: float = 0.2                 # Mesh.MeshSizeMax
+
+    # --- curvature-based refinement -----------------------------------------
+    elements_per_2pi: float = 10.0        # Mesh.MeshSizeFromCurvature (== MinimumElementsPerTwoPi); 0 = off
+
+    # --- algorithm / quality (optional; None = leave gmsh default) ----------
+    algorithm_2d: Optional[int] = None    # Mesh.Algorithm    (default 6 = Frontal-Delaunay)
+    algorithm_3d: Optional[int] = None    # Mesh.Algorithm3D  (default 1 = Delaunay)
+    element_order: int = 1                # Mesh.ElementOrder (2 = quadratic)
+    optimize: bool = True                 # Mesh.Optimize
+
+    # --- escape hatch for any other Mesh.* option ---------------------------
+    extra_options: dict = field(default_factory=dict)   # e.g. {"Mesh.Smoothing": 5}
+
+    def __post_init__(self):
+        if self.dim not in (1, 2, 3):
+            raise ValueError(f"dim must be 1, 2 or 3; got {self.dim}")
+        if self.size_min <= 0 or self.size_max <= 0:
+            raise ValueError("size_min and size_max must be positive")
+        if self.size_min > self.size_max:
+            raise ValueError(f"size_min ({self.size_min}) > size_max ({self.size_max})")
+        if self.elements_per_2pi < 0:
+            raise ValueError("elements_per_2pi must be >= 0 (0 disables curvature sizing)")
+        if self.element_order not in (1, 2):
+            raise ValueError("element_order must be 1 (linear) or 2 (quadratic)")
+
+    def apply(self) -> None:
+        """Push the settings onto the current gmsh model (call before generate())."""
+        opt = gmsh.option.setNumber
+        opt("Mesh.MeshSizeMin", self.size_min)
+        opt("Mesh.MeshSizeMax", self.size_max)
+        opt("Mesh.MeshSizeFromCurvature", self.elements_per_2pi)
+        opt("Mesh.ElementOrder", self.element_order)
+        opt("Mesh.Optimize", int(self.optimize))
+        if self.algorithm_2d is not None:
+            opt("Mesh.Algorithm", self.algorithm_2d)
+        if self.algorithm_3d is not None:
+            opt("Mesh.Algorithm3D", self.algorithm_3d)
+        for name, value in self.extra_options.items():
+            opt(name, value)
+
+    def generate(self) -> None:
+        """Apply settings and mesh in one call."""
+        self.apply()
+        gmsh.model.mesh.generate(self.dim)
+
 
 #%%
 """ miscellaneous functions """
@@ -34,7 +188,7 @@ def rectangle_loop(x, y, z, width, height):
 
 def annulus_loop(x, y, z, r_inner, r_outer, phi_start=0., angle=360.):
     """
-    Flat annulus / annular sector on the plane z. Returns (outer_loop, inner_loops).
+    Flat annulus / annular sector on the plane z. Returns (dimes_outer_loop, inner_loops).
     Built entirely from SHARED vertices so the wire has no duplicate/orphan curves
     that would be left behind (stranded at z=0) when the surfaces are rotated.
     """
@@ -45,9 +199,9 @@ def annulus_loop(x, y, z, r_inner, r_outer, phi_start=0., angle=360.):
 
     # --- full ring: two concentric circles, central hole punched in the ring surface ---
     if abs(angle - 360.) < 1e-9:
-        outer_loop = gmsh.model.occ.addCurveLoop([gmsh.model.occ.addCircle(x, y, z, r_outer)])
+        dimes_outer_loop = gmsh.model.occ.addCurveLoop([gmsh.model.occ.addCircle(x, y, z, r_outer)])
         inner_loop = gmsh.model.occ.addCurveLoop([gmsh.model.occ.addCircle(x, y, z, r_inner)])
-        return outer_loop, [inner_loop]
+        return dimes_outer_loop, [inner_loop]
 
     # --- sector: arcs through shared points via addCircleArc (center=True) ---
     pc   = gmsh.model.occ.addPoint(x, y, z)                 # shared circle center
@@ -185,19 +339,70 @@ def add_sample(sample):
     elif isinstance(sample, Annulus):
         x, y, z = sample.center
         phi_start, phi_end = sample.angular_sector
-        outer_loop, inner_loops = annulus_loop(
+        dimes_outer_loop, inner_loops = annulus_loop(
             x, y, z, sample.r_inner, sample.r_outer, phi_start, phi_end - phi_start
         )
-        return outer_loop, gmsh.model.occ.addPlaneSurface([outer_loop] + inner_loops)
+        return dimes_outer_loop, gmsh.model.occ.addPlaneSurface([dimes_outer_loop] + inner_loops)
 
     else:
         raise TypeError(f"Sample type {type(sample)} is not allowed.")
 
-# 1. create DiMES top surface as truncated cylinder
+def make_dimes_mesh(mesh: MeshConfig = None, filename="test.msh", save_msh=False,
+                    GUI_geo=False, GUI_msh=True, component_surfaces=None,
+                    save_output=False, save_npz=None, save_ply=False,
+                    ply_normals=True, ply_ascii=True):
+    """Finalize geometry, mesh it per `mesh`, label components, show GUIs, export.
 
-# 1.0 Initialize gmsh
+    Mesh options now live in `mesh` (a MeshConfig). `mesh.dim` replaces the old
+    `msh_dim` argument. Pass mesh=None to use defaults that match the original.
+    """
+    if mesh is None:
+        mesh = MeshConfig()
+
+    gmsh.model.occ.synchronize() 
+
+    if GUI_geo:
+        gmsh.fltk.run()
+
+    # Label each component as a named Physical Surface (2-D meshes only)
+    if mesh.dim == 2 and component_surfaces is not None:
+        for comp_name, surf_tags in component_surfaces.items():
+            pg = gmsh.model.addPhysicalGroup(2, surf_tags)
+            gmsh.model.setPhysicalName(2, pg, comp_name)
+
+    # Apply mesh options and generate
+    mesh.generate()
+
+    if GUI_msh:
+        gmsh.fltk.run()
+
+    if save_msh:
+        gmsh.write(filename)
+
+    # save_npz=None means "follow save_msh"; explicit True/False overrides
+    _save_npz = save_msh if save_npz is None else save_npz
+
+    # Save per-component files for 2-D meshes (independent of save_msh)
+    if mesh.dim == 2 and (_save_npz or save_ply) and save_output and component_surfaces is not None:
+        from .export import save_component_meshes
+        base_path = os.path.splitext(filename)[0]
+        save_component_meshes(component_surfaces, base_path, save_npz=_save_npz,
+                              save_ply=save_ply, ply_normals=ply_normals, ply_ascii=ply_ascii)
+
+    # Finalize GMSH
+    gmsh.finalize()
+
+# 0. Create Tile around DiMES
 
 gmsh.initialize()
+
+L_tile = 10.
+
+Tile = Rectangle(L_tile,L_tile,[-L_tile/2,-L_tile/2, 0.])
+
+*_, tile_loop = rectangle_loop(*Tile.ll, Tile.width, Tile.height) 
+
+# 1. create DiMES top surface as truncated cylinder
 
 # 1.1 create Ellipse
 
@@ -206,9 +411,13 @@ rot_axis = [0.,-1.,0.]
 angle = np.deg2rad(5)
 
 curve = truncated_cylinder_Ellipse(*DimesTop.center, DimesTop.r, rot_axis[0], rot_axis[1], angle)
-outer_loop = gmsh.model.occ.addCurveLoop([curve])
+dimes_outer_loop = gmsh.model.occ.addCurveLoop([curve])
 
-# 1.2 Create hole loops and surfaces
+# 1.3 create DiMES hole and tile surface
+
+tile_surface = gmsh.model.occ.addPlaneSurface([tile_loop, dimes_outer_loop])
+
+# 1.4 Create hole loops and surfaces
 
 shapes = [Rectangle(1,1,[-0.5,-0.5, 0.]), Disk(0.5, [-2, 0., 0.]), Annulus(3.3, 3.8, (90, 270), [0., 0., 0.])]
 
@@ -218,10 +427,10 @@ for shape in shapes:
     inner_loops.append(loop)
     inner_surfaces.append(surface)
 
-# 1.3 Create surface with holes
-dimes_top_surface = gmsh.model.occ.addPlaneSurface([outer_loop] + inner_loops)
+# 1.5 Create surface with holes
+dimes_top_surface = gmsh.model.occ.addPlaneSurface([dimes_outer_loop] + inner_loops)
 
-# 1.4 Rotate surfaces
+# 1.6 Rotate surfaces
 if angle != 0.:
     ax, ay, az = rot_axis
     cx, cy, cz = DimesTop.center
@@ -234,59 +443,47 @@ if angle != 0.:
     gmsh.model.occ.translate(all_surfaces, 0, 0, cz - z_min)
     gmsh.model.occ.synchronize()
 
-# 1.5 Add DiMES side surface
+# 1.7 Add DiMES side surface
 if angle != 0.:
-    dimes_base_loop = gmsh.model.occ.addCurveLoop([gmsh.model.occ.addCircle(*DimesTop.center, DimesTop.r)])
-    dimes_side_surface = gmsh.model.occ.addThruSections([dimes_base_loop, outer_loop], makeSolid=False)
+    dimes_base_loop = gmsh.model.occ.addCurveLoop(
+        [gmsh.model.occ.addCircle(*DimesTop.center, DimesTop.r)]
+    )
+    result = gmsh.model.occ.addThruSections(
+        [dimes_base_loop, dimes_outer_loop], makeSolid=False
+    )
+    gmsh.model.occ.synchronize()
+    # result is a list of (dim, tag) tuples — extract the surface tag
+    dimes_side_surface = result[0][1]
+    print(f"Side surface tag: {dimes_side_surface}")  # verify it's an int
 
 
+# mesh = MeshConfig()
+# Add Mesh Options
 
-gmsh.model.occ.synchronize()
+component_surfaces = {
+    "tile":       [tile_surface],
+    "dimes_top":  [dimes_top_surface],
+    "dimes_side": [dimes_side_surface],   # an int, not a tuple
+    **{f"sample_{i}": [s] for i, s in enumerate(inner_surfaces)}
+}
 
-gmsh.model.mesh.generate(2) 
+make_dimes_mesh(
+    mesh=None,
+    component_surfaces=component_surfaces,
+    GUI_msh=True,
+    GUI_geo=False
+)
+
+gmsh.model.mesh.generate(2)
+
+# Run gmsh
 gmsh.fltk.run()
 
 gmsh.finalize()
 
 
 
-# 3. add samples loops to top surface
-def add_sample_loop(sample):
-    """
-    Create a flat sample curve loop and its surface.
 
-    Returns (hole_loop, sample_surface) where:
-      - hole_loop      : loop to punch into the parent surface
-      - sample_surface : the sample's own surface tag
-
-    Caller assembles the parent surface and rotates everything together:
-        parent_surface = addPlaneSurface([parent_outer_loop, hole1, hole2, ...])
-        gmsh.model.occ.rotate([(2, parent_surface), (2, s1), ...], ...)
-    """
-    if isinstance(sample, Disk):
-        x, y, z = sample.center
-        curve  = gmsh.model.occ.addCircle(x, y, z, sample.r)
-        loop   = gmsh.model.occ.addCurveLoop([curve])
-        surface = gmsh.model.occ.addPlaneSurface([loop])
-        return loop, surface
-
-    elif isinstance(sample, Rectangle):
-        x, y, z = sample.ll
-        *_, loop = rectangle_loop(x, y, z, sample.width, sample.height)
-        surface  = gmsh.model.occ.addPlaneSurface([loop])
-        return loop, surface
-
-    elif isinstance(sample, Annulus):
-        x, y, z = sample.center
-        phi_start, phi_end = sample.angular_sector
-        outer_loop, inner_loops = annulus_loop(
-            x, y, z, sample.r_inner, sample.r_outer, phi_start, phi_end - phi_start
-        )
-        surface = gmsh.model.occ.addPlaneSurface([outer_loop] + inner_loops)
-        return outer_loop, surface
-
-    else:
-        raise TypeError(f"Sample type {type(sample)} is not allowed.")
 
 
 def create_loops(input_dict, z_dimes, volumes_surfaces, dot_loops, ax, ay, az, theta_dimes):
@@ -597,11 +794,11 @@ def create_loops(input_dict, z_dimes, volumes_surfaces, dot_loops, ax, ay, az, t
                                           x, y, z, 0, 0, 1, math.pi / 2)
                 gmsh.model.occ.rotate([(1, outer_curve), (1, inner_curve)],
                                       x, y, z, ax, ay, az, theta_dimes)
-                outer_loop = gmsh.model.occ.addCurveLoop([outer_curve])
+                dimes_outer_loop = gmsh.model.occ.addCurveLoop([outer_curve])
                 inner_loop = gmsh.model.occ.addCurveLoop([inner_curve])
                 annulus_surface = gmsh.model.occ.addPlaneSurface(
-                    [outer_loop, inner_loop] + child_loops)
-                dot_loops.append(outer_loop)
+                    [dimes_outer_loop, inner_loop] + child_loops)
+                dot_loops.append(dimes_outer_loop)
 
             else:
                 phi1 = math.radians(phi_start)
