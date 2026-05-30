@@ -22,10 +22,14 @@ class Cube:
     def __post_init__(self): # dataclass calls __post_init__ automatically right after construction
         self.check_input()
 
-    def scale_size(self, scale: float) -> None:
+    def scale_size(self, scale: float):
         self.L_R *= scale
         self.L_phi *= scale
         self.L_Z *= scale
+        return self
+    
+    def scale_position(self, scale: float):
+        self.center = [c * scale for c in self.center]
         return self
 
     def check_input(self) -> None:
@@ -42,6 +46,10 @@ class Disk:
     def scale_size(self, scale: float) -> None:
         self.r *= scale
         return self
+    
+    def scale_position(self, scale: float):
+        self.center = [c * scale for c in self.center]
+        return self
 
     def __post_init__(self): # dataclass calls __post_init__ automatically right after construction
         self.check_input()
@@ -51,17 +59,36 @@ class Disk:
             raise ValueError("len(self.center) must be equal to 3")
         if self.r <= 0.:
             raise ValueError("Disk radius must be greater than 0")
+        
+@dataclass
+class Rectangle:
+    width: float
+    height: float
+    ll: list[float] # lower left corner on plane parallel to rectangle
+    
+    def scale_size(self, scale: float) -> None:
+        self.width *= scale
+        self.height *= scale
+        return self
+    
+    def scale_position(self, scale: float):
+        self.center = [c * scale for c in self.center]
+        return self
 
 @dataclass
 class Annulus:
-    r_minor: float
-    r_major: float
+    r_inner: float
+    r_outer: float
     angular_sector: tuple
     center: list[float] # [R, phi, Z]
 
     def scale_size(self, scale: float) -> None:
-        self.r_minor *= scale
-        self.r_major *= scale
+        self.r_inner *= scale
+        self.r_outer *= scale
+        return self
+
+    def scale_position(self, scale: float):
+        self.center = [c * scale for c in self.center]
         return self
 
     def __post_init__(self): # dataclass calls __post_init__ automatically right after construction
@@ -70,10 +97,10 @@ class Annulus:
     def check_input(self) -> None:
         if len(self.center) != 3:
             raise ValueError("len(self.center) must be equal to 3")
-        if (self.r_minor <= 0.):
-            raise ValueError("Annulus r_minor must be greater than 0")
-        if (self.r_major <= 0.):
-            raise ValueError("Annulus r_major must be greater than 0")
+        if (self.r_inner <= 0.):
+            raise ValueError("Annulus r_inner must be greater than 0")
+        if (self.r_outer <= 0.):
+            raise ValueError("Annulus r_outer must be greater than 0")
         if (self.angular_sector[0] >= self.angular_sector[1]):
             raise ValueError("Annulus angular sector final angle must be smaller than the first angle.")
 
@@ -188,10 +215,10 @@ def make_dimes_geom(input_dict, L_R=8, L_phi=8, L_Z=8, box_center = [0.,0.,0.],
         DiMESTop.center[2] += delta_z_dimes + 0.001*scale # + 0.001*scale to avoid overlapping facets from different surfaces
         
         # once tilted, the disk perimeter turns from a circle into an ellipse
-        r_major = r_dimes / math.cos(theta_dimes)  # major radius
-        r_minor = r_dimes  # minor radius (r1 >= r2)
+        r_outer = r_dimes / math.cos(theta_dimes)  # major radius
+        r_inner = r_dimes  # minor radius (r1 >= r2)
         
-        top_ellipse = gmsh.model.occ.addEllipse(*DiMESTop.center, r_major, r_minor)
+        top_ellipse = gmsh.model.occ.addEllipse(*DiMESTop.center, r_outer, r_inner)
         
         # addEllipse only creates ellipses with major radius along x-axis
         

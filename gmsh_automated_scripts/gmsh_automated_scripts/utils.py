@@ -7,7 +7,9 @@ Created on Tue Oct 15 16:06:17 2024
 """
 import gmsh
 import math
+import numpy as np
 from .helpers import z_on_tilted_surface
+from .utils2 import Disk, Rectangle, Annulus
 
 #%%
 """ miscellaneous functions """
@@ -28,35 +30,74 @@ def rectangle_loop(x, y, z, width, height):
     loop = gmsh.model.occ.addCurveLoop([l1, l2, l3, l4])
     
     return p1, p2, p3, p4, l1, l2, l3, l4, loop
-    
-def roto_Ztranslation(curve, coo: list[float], rot_axis: list[float], angle: float, dimtag = 1):
 
+
+def annulus_loop(x, y, z, r_inner, r_outer, phi_start=0., angle=360.):
+    """
+    Flat annulus / annular sector on the plane z. Returns (outer_loop, inner_loops).
+    Built entirely from SHARED vertices so the wire has no duplicate/orphan curves
+    that would be left behind (stranded at z=0) when the surfaces are rotated.
+    """
+    if not (0 < angle <= 360):
+        raise ValueError(f"angle must be in (0, 360], got {angle}")
+    if r_inner >= r_outer:
+        raise ValueError(f"r_inner ({r_inner}) must be less than r_outer ({r_outer})")
+
+    # --- full ring: two concentric circles, central hole punched in the ring surface ---
+    if abs(angle - 360.) < 1e-9:
+        outer_loop = gmsh.model.occ.addCurveLoop([gmsh.model.occ.addCircle(x, y, z, r_outer)])
+        inner_loop = gmsh.model.occ.addCurveLoop([gmsh.model.occ.addCircle(x, y, z, r_inner)])
+        return outer_loop, [inner_loop]
+
+    # --- sector: arcs through shared points via addCircleArc (center=True) ---
+    pc   = gmsh.model.occ.addPoint(x, y, z)                 # shared circle center
+    phi1 = math.radians(phi_start)
+    phi2 = phi1 + math.radians(angle)
+    nseg = 1 if angle < 180. else 2                         # one OCC arc must span < 180 deg
+    phis = [phi1 + (phi2 - phi1) * k / nseg for k in range(nseg + 1)]
+
+    pt = lambda r, p: gmsh.model.occ.addPoint(x + r * math.cos(p), y + r * math.sin(p), z)
+    o_pts = [pt(r_outer, p) for p in phis]
+    i_pts = [pt(r_inner, p) for p in phis]
+
+    outer_arcs = [gmsh.model.occ.addCircleArc(o_pts[k], pc, o_pts[k + 1]) for k in range(nseg)]
+    inner_arcs = [gmsh.model.occ.addCircleArc(i_pts[k], pc, i_pts[k + 1]) for k in range(nseg)]
+    line_end   = gmsh.model.occ.addLine(o_pts[-1], i_pts[-1])
+    line_start = gmsh.model.occ.addLine(i_pts[0],  o_pts[0])
+
+    sector_loop = gmsh.model.occ.addCurveLoop(
+        outer_arcs + [line_end] + [-a for a in reversed(inner_arcs)] + [line_start]
+    )
+    gmsh.model.occ.remove([(0, pc)])     # center point is only a construction aid; drop it
+    return sector_loop, []
+
+
+  
+def roto_Ztranslation(curve, coo: list[float], rot_axis: list[float], angle: float, dimtag=1, translate = True, height = 0.):
     """object is rotated around an axis of revolution 
-       AND translated along the z axis to ensure zmin = z_center.
+       AND translated along the z axis to ensure zmin = 0..
        Where z_center is the central z-coo before rotation."""
     
-    x, y, z = coo  # center coordinates before transformation
+    x, y, z = coo
     ax, ay, az = rot_axis
 
-    z = z_on_tilted_surface(x, y, z, ax, ay, angle) # translate along z
+    # 1. rotate around the origin
+    gmsh.model.occ.rotate([(dimtag, curve)], x, y, z, ax, ay, az, angle)
+
+    # 2. synchronize to query the bounding box after rotation
+    gmsh.model.occ.synchronize()
+
+    # 3. find zmin of the rotated curve
+    x_min, y_min, z_min, x_max, y_max, z_max = gmsh.model.getBoundingBox(dimtag, curve)
+
+    # 4. translate along Z so that zmin = z
+    if translate:
+        dz = z - z_min
+        gmsh.model.occ.translate([(dimtag, curve)], 0, 0, dz + height)
+        gmsh.model.occ.synchronize()
+
+def truncated_cylinder_Ellipse(x, y, z, r, ax, ay, angle):
     
-    gmsh.model.occ.rotate([(dimtag , curve)], x, y, z, ax, ay, az, angle)
-
-    return
-
-def truncated_cylinder_loop(x, y, z, r,
-              ax, ay, az,
-              angle):
-    
-    """
-    The top surface of a tilted DiMES head is approx. a slice of a cylinder (top surface of a truncated cylinder).
-
-    r1 along x, r2 along y by default from .addEllipse method
-
-    if rotation about y-axis -> r1 increases
-    if rotation about x-axis -> r2 increases
-    """
-
     if angle != 0.:
         r1 = r / math.cos(angle) if abs(ay) > abs(ax) else r  # stretch x when rotating about y
         r2 = r / math.cos(angle) if abs(ax) > abs(ay) else r  # stretch y when rotating about x
@@ -64,104 +105,190 @@ def truncated_cylinder_loop(x, y, z, r,
         # if r1 != r2 disk perimeter is an Ellipse
         curve = gmsh.model.occ.addEllipse(x , y , z , r1, r2) # r1 along x, r2 along y by default from .addEllipse method
     else:
-        curve = gmsh.model.occ.addEllipse(x, y, z, r, r)
+        curve = gmsh.model.occ.addCircle(x, y, z, r)
 
-    roto_Ztranslation(curve, [x, y, z], [ax, ay, az], angle)
+    return curve
 
-    loop = gmsh.model.occ.addCurveLoop([curve]) # add loop after rotation. Remember: you can't rotate loops
-
-    return curve, loop
-
-
-# 1. create top surface as truncated cylinder
-dimes_top_loop = truncated_cylinder_loop(x, y, z, r, ax, ay, az, angle)
-dimes_top_surface = gmsh.model.occ.addPlaneSurface([dimes_top_loop])
-
-# 2. create side surface by connecting a circular base_loop to the top loop
-dimes_base_loop = gmsh.model.occ.addCurveLoop([gmsh.model.occ.addCircle(x, y, z, r)])
-dimes_side_surface = gmsh.model.occ.addThruSections([dimes_base_loop, dimes_top_surface], makeSolid = False)
-
-# 3. add samples
-
-# if theta_sample > theta_dimes -> a side surface must be added for each sample 
+def truncated_cylinder_loop(x, y, z, r,
+              ax, ay, az,
+              angle, height = 0.):
     
-    if theta_sample > theta_dimes:
+    """
+    The top surface of a tilted DiMES head or a tilted button is approx. a slice of a cylinder (top surface of a truncated cylinder).
 
-        if "deposits" in elem_def and elem_def["deposits"]:
-            raise Exception("Deposits on tilted dots are not supported")
+    r1 along x, r2 along y by default from .addEllipse method
 
-        #---------------------
+    if rotation about y-axis -> r1 increases
+    if rotation about x-axis -> r2 increases
+    """
 
-        # PLEASE NOTE: this code only works for rotations
-        # - about the y-axis (ax=0, ay=±1, az=0)
-        # - about the x-axis (ax=±1, ay=0, az=0)
-        #
-        # ** all other combinations might not work for rectangular dots
-        #
-        #
-        # ** if theta_dimes !=0  dots should be centered symmetrical along axis perp.
-        # to rotation axis. For instace (if rotation about y, dots should be 
-        # located in a position where their central position (x_center==0) .
-        # Otherwise you might encounter issues related to the shift along the z-axis.
-        # For the moment it is better to avoid setting theta_dimes!=0 when 
-        # also theta_dot!=0
-        
-        #---------------------
-        
-        # create top ellipse:
-        
-        # 1. shift ellipse along z to avoid intersection with DiMES head surface
-        # after rotation
-        
-        delta_z = r * abs(math.tan(theta_dot - theta_dimes)) + 0.0001 # + 0.0001 to avoid intersecting facets
-        
-        z += delta_z
-        
-        # 2. make top elliptical curve
-        dot_top_curve = gmsh.model.occ.addEllipse(x  , y , z, r / math.cos(theta_dot), r)
-        
-        
-        # 3. rotate top elliptical curve (remember: you can't rotate loops) and make surface
-        
-        if ax != 0:
-            gmsh.model.occ.rotate([(1, dot_top_curve)], x,
-                                    y, z, 0, 0, 1, math.pi / 2)
-        
-        gmsh.model.occ.rotate([(1 , dot_top_curve)], x, y, z, ax, ay, az, theta_dot)
-        
-        dot_top_loop = gmsh.model.occ.addCurveLoop([dot_top_curve])
-        dot_top_surface = gmsh.model.occ.addPlaneSurface([dot_top_loop])
-        
-        # 4. create side surface
-        dot_side_surface = gmsh.model.occ.addThruSections([dot_base_loop, dot_top_loop], makeSolid = False)
-        
-        # 5. append side and top surfaces to list of surface delimiting the plasma volume
-        volumes_surfaces.append(dot_side_surface[0][1])
-        volumes_surfaces.append(dot_top_surface)
-        component_surfaces[name] = [dot_side_surface[0][1], dot_top_surface]
+    curve = truncated_cylinder_Ellipse(x, y, z, r, ax, ay, angle)
+
+    roto_Ztranslation(curve, [x, y, z], [ax, ay, az], angle, translate=True, height=height)
+
+    # add loop after rotation. Remember: you can't rotate loops
+
+    loop = gmsh.model.occ.addCurveLoop([curve]) 
+
+    return curve, loop # -> tuple(curve_tag:int, loop_tag:int) 
+
+def get_surface_center(surface_tag: int) -> tuple[float, float, float]:
+    """Returns the (x, y, z) center of mass of a planar surface."""
+    gmsh.model.occ.synchronize()
+    x, y, z = gmsh.model.occ.getCenterOfMass(2, surface_tag)
+    return x, y, z
+
+
+def get_surface_rotation(surface_tag: int) -> tuple[float, float, float]:
+    """
+    Returns the rotation (rx, ry, rz) in radians of a planar surface
+    by computing its normal vector and deriving Euler angles from it.
+    """
+    gmsh.model.occ.synchronize()
+    gmsh.model.mesh.generate(2)
+
+    # Get nodes on the surface and their parametric coordinates
+    _, _, param = gmsh.model.mesh.getNodes(2, surface_tag, includeBoundary=True)
+
+    # Get the normal at the first node (all normals are equal on a planar surface)
+    normal = gmsh.model.getNormal(surface_tag, param[:2])
+    nx, ny, nz = normal[0], normal[1], normal[2]
+    n = np.array([nx, ny, nz])
+    n = n / np.linalg.norm(n)  # ensure unit vector
+
+    # Rotation around X axis (pitch): angle between n and the XZ plane
+    rx = np.arctan2(ny, nz)
+
+    # Rotation around Y axis (roll): angle between n and the YZ plane
+    ry = np.arctan2(nx, nz)
+
+    # Rotation around Z axis (yaw): angle of the projection onto the XY plane
+    rz = np.arctan2(ny, nx)
+
+    return rx, ry, rz
+
+
+# 3. add samples loops to top surface
+def add_sample(sample):
+    """Returns (hole_loop, sample_surface). Caller punches hole_loop into the parent
+       and rotates the surfaces; boundary curves follow their surface automatically."""
+    if isinstance(sample, Disk):
+        x, y, z = sample.center
+        loop = gmsh.model.occ.addCurveLoop([gmsh.model.occ.addCircle(x, y, z, sample.r)])
+        return loop, gmsh.model.occ.addPlaneSurface([loop])
+
+    elif isinstance(sample, Rectangle):
+        x, y, z = sample.ll
+        *_, loop = rectangle_loop(x, y, z, sample.width, sample.height)
+        return loop, gmsh.model.occ.addPlaneSurface([loop])
+
+    elif isinstance(sample, Annulus):
+        x, y, z = sample.center
+        phi_start, phi_end = sample.angular_sector
+        outer_loop, inner_loops = annulus_loop(
+            x, y, z, sample.r_inner, sample.r_outer, phi_start, phi_end - phi_start
+        )
+        return outer_loop, gmsh.model.occ.addPlaneSurface([outer_loop] + inner_loops)
 
     else:
+        raise TypeError(f"Sample type {type(sample)} is not allowed.")
 
-        # collect child deposit loops to perforate this dot surface
-        child_loops = []
-        child_surfaces = {}
-        if "deposits" in elem_def and elem_def["deposits"]:
-            child_surfaces = create_loops(elem_def["deposits"], z_dimes, volumes_surfaces,
-                                            child_loops, ax, ay, az, theta_dimes)
+# 1. create DiMES top surface as truncated cylinder
 
-        dot_surface = gmsh.model.occ.addPlaneSurface([dot_base_loop] + child_loops)
+# 1.0 Initialize gmsh
 
-        # append dot_base_loop to list of holes composing parent (DiMES or dot) surface
-        dot_loops.append(dot_base_loop)
+gmsh.initialize()
 
-        # append disk surface to list of surfaces delimiting the plasma volume
-        volumes_surfaces.append(dot_surface)
-        component_surfaces[name] = [dot_surface]
-        component_surfaces.update(child_surfaces)
+# 1.1 create Ellipse
 
-    return
+DimesTop = Disk(4., [0.,0.,0.])
+rot_axis = [0.,-1.,0.]
+angle = np.deg2rad(5)
 
-#%%
+curve = truncated_cylinder_Ellipse(*DimesTop.center, DimesTop.r, rot_axis[0], rot_axis[1], angle)
+outer_loop = gmsh.model.occ.addCurveLoop([curve])
+
+# 1.2 Create hole loops and surfaces
+
+shapes = [Rectangle(1,1,[-0.5,-0.5, 0.]), Disk(0.5, [-2, 0., 0.]), Annulus(3.3, 3.8, (90, 270), [0., 0., 0.])]
+
+inner_loops, inner_surfaces = [], []
+for shape in shapes:
+    loop, surface = add_sample(shape)
+    inner_loops.append(loop)
+    inner_surfaces.append(surface)
+
+# 1.3 Create surface with holes
+dimes_top_surface = gmsh.model.occ.addPlaneSurface([outer_loop] + inner_loops)
+
+# 1.4 Rotate surfaces
+if angle != 0.:
+    ax, ay, az = rot_axis
+    cx, cy, cz = DimesTop.center
+
+    all_surfaces = [(2, dimes_top_surface)] + [(2, s) for s in inner_surfaces]
+
+    gmsh.model.occ.rotate(all_surfaces, cx, cy, cz, ax, ay, az, angle)   # surfaces only
+    gmsh.model.occ.synchronize()
+    _, _, z_min, _, _, _ = gmsh.model.getBoundingBox(2, dimes_top_surface)
+    gmsh.model.occ.translate(all_surfaces, 0, 0, cz - z_min)
+    gmsh.model.occ.synchronize()
+
+# 1.5 Add DiMES side surface
+if angle != 0.:
+    dimes_base_loop = gmsh.model.occ.addCurveLoop([gmsh.model.occ.addCircle(*DimesTop.center, DimesTop.r)])
+    dimes_side_surface = gmsh.model.occ.addThruSections([dimes_base_loop, outer_loop], makeSolid=False)
+
+
+
+gmsh.model.occ.synchronize()
+
+gmsh.model.mesh.generate(2) 
+gmsh.fltk.run()
+
+gmsh.finalize()
+
+
+
+# 3. add samples loops to top surface
+def add_sample_loop(sample):
+    """
+    Create a flat sample curve loop and its surface.
+
+    Returns (hole_loop, sample_surface) where:
+      - hole_loop      : loop to punch into the parent surface
+      - sample_surface : the sample's own surface tag
+
+    Caller assembles the parent surface and rotates everything together:
+        parent_surface = addPlaneSurface([parent_outer_loop, hole1, hole2, ...])
+        gmsh.model.occ.rotate([(2, parent_surface), (2, s1), ...], ...)
+    """
+    if isinstance(sample, Disk):
+        x, y, z = sample.center
+        curve  = gmsh.model.occ.addCircle(x, y, z, sample.r)
+        loop   = gmsh.model.occ.addCurveLoop([curve])
+        surface = gmsh.model.occ.addPlaneSurface([loop])
+        return loop, surface
+
+    elif isinstance(sample, Rectangle):
+        x, y, z = sample.ll
+        *_, loop = rectangle_loop(x, y, z, sample.width, sample.height)
+        surface  = gmsh.model.occ.addPlaneSurface([loop])
+        return loop, surface
+
+    elif isinstance(sample, Annulus):
+        x, y, z = sample.center
+        phi_start, phi_end = sample.angular_sector
+        outer_loop, inner_loops = annulus_loop(
+            x, y, z, sample.r_inner, sample.r_outer, phi_start, phi_end - phi_start
+        )
+        surface = gmsh.model.occ.addPlaneSurface([outer_loop] + inner_loops)
+        return outer_loop, surface
+
+    else:
+        raise TypeError(f"Sample type {type(sample)} is not allowed.")
+
+
 def create_loops(input_dict, z_dimes, volumes_surfaces, dot_loops, ax, ay, az, theta_dimes):
     
     # check if user is not tilting both DiMES head and dots
