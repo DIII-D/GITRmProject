@@ -1,6 +1,7 @@
 import numpy as np
 import gmsh
 import math
+from .data_structures import Object2D, AngledSample
 
 def rectangle_loop(x, y, z, width, height):
     # Create points for the rectangle corners
@@ -58,7 +59,6 @@ def annulus_loop(x, y, z, r_inner, r_outer, phi_start=0., angle=360.):
     )
     gmsh.model.occ.remove([(0, pc)])     # center point is only a construction aid; drop it
     return sector_loop, []
-
 
   
 def roto_Ztranslation(curve, coo: list[float], rot_axis: list[float], angle: float, dimtag=1, translate = True, height = 0.):
@@ -154,3 +154,89 @@ def get_surface_rotation(surface_tag: int) -> tuple[float, float, float]:
     rz = np.arctan2(ny, nx)
 
     return rx, ry, rz
+
+
+def make_angled_sample(sample: Object2D):
+
+    assert isinstance(sample.shape, AngledSample), \
+        TypeError(f"Sample shape is of type {type(sample.shape)} while it must be of type AngledSample.")
+
+    occ = gmsh.model.occ
+    shape = sample.shape
+
+    dz     = shape.r * np.tan(shape.angle)
+    z_flat = shape.height + shape.z_cut
+
+    assert shape.z_cut < 2 * dz - 1e-10, \
+        f"z_cut={shape.z_cut} too large! max allowed: {2*dz:.6f}"
+
+    margin = 0.1 * shape.r
+
+    # 1. Cylinder
+    cyl_bottom = shape.height - dz - margin
+    cyl_top    = shape.height + dz + shape.z_cut + margin
+    cyl = occ.addCylinder(0, 0, cyl_bottom, 0, 0, cyl_top - cyl_bottom, shape.r)
+
+    # 2. Tilted box cut
+    box_tilt = occ.addBox(-2*shape.r, -2*shape.r, shape.height,
+                           4*shape.r,  4*shape.r, dz + shape.z_cut + margin)
+    occ.rotate([(3, box_tilt)], 0, 0, shape.height, 0, 1, 0, -shape.angle) # rotate around Y-axis
+
+    # 3. Flat box cut
+    box_flat = occ.addBox(-2*shape.r, -2*shape.r, z_flat,
+                           4*shape.r,  4*shape.r, dz + margin)
+
+    # 4. Cut
+    truncated, _ = occ.cut(
+        [(3, cyl)],
+        [(3, box_tilt), (3, box_flat)],
+        removeObject=True, removeTool=True
+    )
+    occ.synchronize()
+
+# 5. Identify bottom face BEFORE translation:
+    #    must be FLAT (zmin ≈ zmax) AND lowest — the side wall also touches
+    #    the bottom z, so filtering by min(zmin) alone is ambiguous.
+    faces = gmsh.model.getBoundary(truncated, oriented=False)
+
+    z_tol = min(dz, shape.z_cut) * 1e-2   # separates flat faces from spanning ones
+
+    face_info = {}
+    for dim, tag in faces:
+        _, _, zmin, _, _, zmax = gmsh.model.getBoundingBox(dim, tag)
+        face_info[tag] = (zmin, zmax, dim)
+
+    # flat faces only (near-zero z-span)
+    flat_faces = {t: v for t, v in face_info.items() if abs(v[1] - v[0]) < z_tol}
+    bottom_tag = min(flat_faces, key=lambda t: flat_faces[t][0])
+    print(f"  Bottom face (flat, lowest): tag={bottom_tag}, "
+          f"zmin={face_info[bottom_tag][0]:.6f}, zmax={face_info[bottom_tag][1]:.6f}")
+
+    faces_to_keep = [(dim, tag) for dim, tag in faces if tag != bottom_tag]
+    for dim, tag in faces_to_keep:
+        print(f"  Keeping face {tag}: zmin={face_info[tag][0]:.6f}, zmax={face_info[tag][1]:.6f}")
+
+    # 6. Translate so zmin of solid = 0
+    vol_tag = truncated[0][1]
+    _, _, zmin_solid, _, _, _ = gmsh.model.getBoundingBox(3, vol_tag)
+    occ.translate(truncated, 0, 0, -zmin_solid)
+    occ.synchronize()
+
+    # 7. Copy kept surfaces and remove solid
+    surfaces = occ.copy(faces_to_keep)
+    occ.remove(truncated, recursive=True)
+    occ.synchronize()
+
+    # 8. Translate to final (x, y) location
+    occ.translate(surfaces, *shape.center)
+    occ.synchronize()
+
+    # 9. Build the hole loop explicitly — we already KNOW it's a circle of
+    #    radius shape.r at the sample center, sitting at z=0. No fishing.
+    cx, cy, _ = shape.center
+    bottom_circle = occ.addCircle(cx, cy, 0.0, shape.r)
+    bottom_loop   = occ.addCurveLoop([bottom_circle])
+    occ.synchronize()
+
+    surface_tags = [tag for _, tag in surfaces]
+    return bottom_loop, surface_tags

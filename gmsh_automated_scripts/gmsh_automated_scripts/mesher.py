@@ -10,11 +10,9 @@ from .data_structures import *
 from .helpers import *
 from .export import *
 import gmsh
-import math
-import numpy as np
 
 
-def add_sample(sample):
+def make_flush_sample(sample):
     """Returns (hole_loop, sample_surface). Caller punches hole_loop into the parent
        and rotates the surfaces; boundary curves follow their surface automatically."""
     if isinstance(sample, Disk):
@@ -83,10 +81,17 @@ def build_dimes_domain(
     # Sample holes
     inner_loops, samples = [], []
     for shape, label in zip(shapes, labels):
-        loop, surface = add_sample(shape)
-        inner_loops.append(loop)
+
         obj = Object2D(shape=shape, label=label)
-        obj.surface_tag = surface
+        
+        if isinstance(shape, AngledSample):
+            loop, surface_tags = make_angled_sample(obj)
+            obj.surface_tag = surface_tags
+        else:
+            loop, surface = make_flush_sample(shape)
+            obj.surface_tag = surface
+
+        inner_loops.append(loop)
         samples.append(obj)
 
     # DiMES top surface with sample holes punched in

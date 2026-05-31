@@ -1,6 +1,7 @@
 from dataclasses import dataclass, field
 from typing import Union, Optional
 import gmsh
+import math
 
 @dataclass
 class Cube:
@@ -94,8 +95,42 @@ class Annulus:
         if (self.angular_sector[0] >= self.angular_sector[1]):
             raise ValueError("Annulus angular sector final angle must be smaller than the first angle.")
 
+
+@dataclass
+class AngledSample:
+    center: list[float] = field(default_factory=lambda: [0., 0., 0.])
+    r: float = 0.3
+    height: float = 0.01
+    angle: float = 10 * math.pi / 180
+    z_cut: float = 0.015
+
+    def scale_size(self, scale: float) -> None:
+        self.r *= scale
+        self.height *= scale
+        self.z_cut *= scale
+        return self
+
+    def scale_position(self, scale: float):
+        self.center = [c * scale for c in self.center]
+        return self
+    
+    def __post_init__(self): # dataclass calls __post_init__ automatically right after construction
+        self.check_input()
+
+    def check_input(self) -> None:
+        if len(self.center) != 3:
+            raise ValueError("len(self.center) must be equal to 3")
+        if (self.r <= 0.):
+            raise ValueError("Angled Sample radius must be greater than 0")
+        if (self.height <= 0.):
+            raise ValueError("Angled Sample height must be greater than 0")
+        if (self.z_cut <= 0.):
+            raise ValueError("Angled Sample z_cut must be greater than 0")
+        if abs(self.angle) >= math.pi / 2:
+            raise ValueError("Angle must be below pi/2")
+
 # Type alias for a single shape or list of shapes
-Shape = Union[Rectangle, Disk, Annulus, Cube]
+Shape = Union[Rectangle, Disk, Annulus, AngledSample, Cube]
 ShapeOrList = Union[Shape, list[Shape]]
 
 @dataclass
