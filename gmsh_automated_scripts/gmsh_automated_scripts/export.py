@@ -2,6 +2,8 @@
 # -*- coding: utf-8 -*-
 import gmsh
 import numpy as np
+import os
+from .data_structures import MeshConfig
 
 
 def extract_surface_mesh(surf_tag):
@@ -137,7 +139,7 @@ def save_component_meshes(component_surfaces, base_path, save_npz=True, save_ply
         {name: [surface_tag, ...]} as returned by make_dimes_geom.
     base_path : str
         Path prefix without extension, e.g. "/path/to/DiMES_3D".
-        Output files are written as  <base_path>_<name>.npz / .ply.
+        Output files are written as  <base_path>/<name>.npz / .ply.
     save_npz : bool
         Write a numpy .npz file for each component (default True).
     save_ply : bool
@@ -173,12 +175,12 @@ def save_component_meshes(component_surfaces, base_path, save_npz=True, save_ply
         saved = []
 
         if save_npz:
-            npz_path = f"{base_path}_{name}.npz"
+            npz_path = f"{base_path}/{name}.npz"
             np.savez(npz_path, nodes=nodes_out, triangles=tris_out)
             saved.append(npz_path)
 
         if save_ply and len(tris_out) > 0:
-            ply_path = f"{base_path}_{name}.ply"
+            ply_path = f"{base_path}/{name}.ply"
             normals_out = compute_vertex_normals(nodes_out, tris_out) if ply_normals else None
             write_ply(ply_path, nodes_out, tris_out, normals=normals_out, ascii_format=ply_ascii)
             saved.append(ply_path)
@@ -186,3 +188,108 @@ def save_component_meshes(component_surfaces, base_path, save_npz=True, save_ply
         if saved:
             print(f"  saved {name:30s}  {len(nodes_out):6d} nodes  "
                   f"{len(tris_out):6d} triangles  →  {',  '.join(saved)}")
+
+def make_dimes_mesh(mesh: MeshConfig = None, filename="test.msh", save_msh=False,
+                    GUI_geo=False, GUI_msh=True, component_surfaces=None,
+                    save_output=False, save_npz=None, save_ply=False,
+                    ply_normals=True, ply_ascii=True, scale=1., base_path:str=None):
+    """Finalize geometry, mesh it per `mesh`, label components, show GUIs, export.
+
+    Mesh options now live in `mesh` (a MeshConfig). `mesh.dim` replaces the old
+    `msh_dim` argument. Pass mesh=None to use defaults that match the original.
+    """
+    if mesh is None:
+        mesh = MeshConfig().scale_parameters(scale=scale)
+
+    gmsh.model.occ.synchronize() 
+
+    if GUI_geo:
+        gmsh.fltk.run()
+
+    # Label each component as a named Physical Surface (2-D meshes only)
+    if mesh.dim == 2 and component_surfaces is not None:
+        for comp_name, surf_tags in component_surfaces.items():
+            pg = gmsh.model.addPhysicalGroup(2, surf_tags)
+            gmsh.model.setPhysicalName(2, pg, comp_name)
+
+    # Apply mesh options and generate
+    mesh.generate()
+
+    if GUI_msh:
+        gmsh.fltk.run()
+
+    if save_msh:
+        gmsh.write(filename)
+
+    # save_npz=None means "follow save_msh"; explicit True/False overrides
+    _save_npz = save_msh if save_npz is None else save_npz
+
+    # Save per-component files for 2-D meshes (independent of save_msh)
+    if mesh.dim == 2 and (_save_npz or save_ply) and save_output and component_surfaces is not None:
+        _base_path = base_path if base_path is not None else os.path.splitext(filename)[0]
+        save_component_meshes(component_surfaces, _base_path, save_npz=_save_npz,
+                              save_ply=save_ply, ply_normals=ply_normals, ply_ascii=ply_ascii)
+
+    # Finalize GMSH
+    gmsh.finalize()
+
+
+# def save_component_meshes(component_surfaces, base_path, save_npz=True, save_ply=False,
+#                           ply_normals=True, ply_ascii=False):
+#     """Save one .npz (and optionally one .ply) per component.
+
+#     Parameters
+#     ----------
+#     component_surfaces : dict
+#         {name: [surface_tag, ...]} as returned by make_dimes_geom.
+#     base_path : str
+#         Path prefix without extension, e.g. "/path/to/DiMES_3D".
+#         Output files are written as  <base_path>_<name>.npz / .ply.
+#     save_npz : bool
+#         Write a numpy .npz file for each component (default True).
+#     save_ply : bool
+#         Write a PLY file for each component (default False).
+#     ply_normals : bool
+#         Include per-vertex normals in PLY output (default True).
+#     ply_ascii : bool
+#         Write PLY in ASCII format instead of binary little-endian (default False).
+#     """
+#     for name, surf_tags in component_surfaces.items():
+#         all_nodes = []
+#         all_tris = []
+#         offset = 0
+
+#         for tag in surf_tags:
+#             try:
+#                 nodes, tris = extract_surface_mesh(tag)
+#             except Exception:
+#                 continue
+#             if len(nodes) == 0:
+#                 continue
+#             all_nodes.append(nodes)
+#             all_tris.append(tris + offset)
+#             offset += len(nodes)
+
+#         if not all_nodes:
+#             continue
+
+#         nodes_out = np.vstack(all_nodes)
+#         tris_out = (np.vstack(all_tris) if all_tris
+#                     else np.empty((0, 3), dtype=np.int64))
+
+#         saved = []
+
+#         if save_npz:
+#             npz_path = f"{base_path}_{name}.npz"
+#             np.savez(npz_path, nodes=nodes_out, triangles=tris_out)
+#             saved.append(npz_path)
+
+#         if save_ply and len(tris_out) > 0:
+#             ply_path = f"{base_path}_{name}.ply"
+#             normals_out = compute_vertex_normals(nodes_out, tris_out) if ply_normals else None
+#             write_ply(ply_path, nodes_out, tris_out, normals=normals_out, ascii_format=ply_ascii)
+#             saved.append(ply_path)
+
+#         if saved:
+#             print(f"  saved {name:30s}  {len(nodes_out):6d} nodes  "
+#                   f"{len(tris_out):6d} triangles  →  {',  '.join(saved)}")

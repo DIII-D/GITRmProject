@@ -9,6 +9,7 @@ package-mode = true
 [tool.poetry.dependencies]
 python = "^3.10"
 gmsh = "^4.13.1"
+numpy = ">=1.20"
 
 [build-system]
 requires = ["poetry-core"]
