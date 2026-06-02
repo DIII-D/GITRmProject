@@ -1,41 +1,20 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-import gmsh
-import numpy as np
+"""Mesh export: gmsh meshes once and writes a single .msh; PLY/NPZ are derived
+from that file per physical group. The .msh already stores one conformal global
+node block, so per-group extraction shares seam nodes automatically -- no
+includeBoundary duplication and no coordinate welding to tune."""
+
 import os
+import tempfile
+import numpy as np
+import meshio
+import gmsh
 from .data_structures import MeshConfig
 
 
-def extract_surface_mesh(surf_tag):
-    """Return (nodes_xyz, triangles) for one OCC surface tag.
-
-    Nodes is (N, 3) float64.  Triangles is (M, 3) int64 of local 0-based indices.
-    Returns empty arrays if the surface carries no 2-D elements.
-    """
-    node_tags, coords, _ = gmsh.model.mesh.getNodes(
-        dim=2, tag=surf_tag, includeBoundary=True)
-
-    if len(node_tags) == 0:
-        return np.empty((0, 3)), np.empty((0, 3), dtype=np.int64)
-
-    nodes_xyz = coords.reshape(-1, 3)
-    tag_to_idx = {int(t): i for i, t in enumerate(node_tags)}
-
-    elem_types, _, node_conns = gmsh.model.mesh.getElements(dim=2, tag=surf_tag)
-
-    tri_blocks = []
-    for etype, conn in zip(elem_types, node_conns):
-        if etype == 2:  # 3-node triangle
-            tri_blocks.append(
-                np.array([tag_to_idx[int(t)] for t in conn],
-                         dtype=np.int64).reshape(-1, 3))
-
-    triangles = np.vstack(tri_blocks) if tri_blocks else np.empty((0, 3), dtype=np.int64)
-    return nodes_xyz, triangles
-
-
 def compute_vertex_normals(nodes, triangles):
-    """Compute per-vertex normals as the area-weighted average of adjacent face normals.
+    """Per-vertex normals as the area-weighted average of adjacent face normals.
 
     Parameters
     ----------
@@ -57,7 +36,6 @@ def compute_vertex_normals(nodes, triangles):
 
     norms = np.linalg.norm(vertex_normals, axis=1, keepdims=True)
 
-    # Identify degenerate vertices and warn
     degenerate = (norms < np.finfo(np.float64).eps).ravel()
     if np.any(degenerate):
         import warnings
@@ -76,21 +54,7 @@ def compute_vertex_normals(nodes, triangles):
 
 
 def write_ply(path, nodes, triangles, normals=None, ascii_format=False):
-    """Write a PLY file, binary little-endian by default.
-
-    Parameters
-    ----------
-    path : str
-        Output file path (should end with .ply).
-    nodes : (N, 3) float array
-        Vertex coordinates.
-    triangles : (M, 3) int array
-        Triangle vertex indices (0-based).
-    normals : (N, 3) float array or None
-        Per-vertex normals.  If None, normals are omitted.
-    ascii_format : bool
-        Write ASCII format instead of binary little-endian.
-    """
+    """Write a PLY file, binary little-endian by default."""
     verts = nodes.astype(np.float32)
     faces = triangles.astype(np.uint32)
     has_normals = normals is not None
@@ -130,93 +94,114 @@ def write_ply(path, nodes, triangles, normals=None, ascii_format=False):
                 f.write(f"3 {tri[0]} {tri[1]} {tri[2]}\n")
     else:
         vert_data = np.hstack([verts, norms]) if has_normals else verts
-
-        # face buffer: 1 uint8 (count=3) + 3 uint32s = 13 bytes per face
         n_faces = len(faces)
         face_buf = np.empty(n_faces * 13, dtype=np.uint8)
         face_view = face_buf.reshape(n_faces, 13)
         face_view[:, 0] = 3
         face_view[:, 1:] = faces.view(np.uint8).reshape(n_faces, 12)
-
         with open(path, "wb") as f:
             f.write(header.encode("ascii"))
             f.write(vert_data.tobytes())
             f.write(face_buf.tobytes())
 
 
-def save_component_meshes(component_surfaces, base_path, save_npz=True, save_ply=False,
-                          ply_normals=True, ply_ascii=False):
-    """Save one .npz (and optionally one .ply) per component.
+def _read_surface_groups(msh_path):
+    """Read a .msh, return (global_points (N,3), {physical_name: triangles}).
+
+    Triangles are (M, 3) indices into the shared global point array, so nodes
+    shared between groups (the conformal seam) carry the same index.
+    """
+    m = meshio.read(msh_path)
+    points = m.points
+    tag_to_name = {tag: name for name, (tag, dim) in m.field_data.items() if dim == 2}
+
+    groups = {}
+    for cb, phys in zip(m.cells, m.cell_data.get("gmsh:physical", [])):
+        if cb.type != "triangle":
+            continue
+        for tag in np.unique(phys):
+            name = tag_to_name.get(int(tag))
+            if name is None:
+                continue
+            groups.setdefault(name, []).append(cb.data[phys == tag])
+
+    return points, {name: np.vstack(blocks) for name, blocks in groups.items()}
+
+
+def _compact(points, tris_global):
+    """Reduce a global-indexed triangle set to a compact local (nodes, triangles)
+    pair containing only the referenced (deduplicated) vertices."""
+    used = np.unique(tris_global)
+    remap = {int(t): i for i, t in enumerate(used)}
+    nodes = points[used]
+    triangles = np.vectorize(remap.__getitem__)(tris_global).astype(np.int64)
+    return nodes, triangles
+
+
+def save_component_meshes(msh_path, base_path, save_npz=True, save_ply=False,
+                          ply_normals=True, ply_ascii=False,
+                          weld_dimes=True, dimes_groups=("dimes_top", "dimes_side")):
+    """Derive one .npz (and optionally .ply) per component from a .msh.
+
+    Each physical group is read against the shared global node block and then
+    compacted, so a component's surfaces (e.g. an angled sample's top + side,
+    which live under one physical group) come out as a single watertight mesh
+    with the seam already shared -- no welding step needed.
 
     Parameters
     ----------
-    component_surfaces : dict
-        {name: [surface_tag, ...]} as returned by make_dimes_geom.
-    base_path : str
-        Path prefix without extension, e.g. "/path/to/DiMES_3D".
-        Output files are written as  <base_path>/<name>.npz / .ply.
-    save_npz : bool
-        Write a numpy .npz file for each component (default True).
-    save_ply : bool
-        Write a PLY file for each component (default False).
-    ply_normals : bool
-        Include per-vertex normals in PLY output (default True).
-    ply_ascii : bool
-        Write PLY in ASCII format instead of binary little-endian (default False).
+    msh_path : str
+        Path to the .msh written by gmsh.
+    weld_dimes : bool
+        If True, the `dimes_groups` (top + side, two separate physical groups)
+        are fused into one 'dimes' output with the rim deduplicated. If False
+        they are written as separate components.
+    dimes_groups : tuple[str, str]
+        Names of the DiMES top and side physical groups to fuse.
     """
-    for name, surf_tags in component_surfaces.items():
-        all_nodes = []
-        all_tris = []
-        offset = 0
+    points, groups = _read_surface_groups(msh_path)
 
-        for tag in surf_tags:
-            try:
-                nodes, tris = extract_surface_mesh(tag)
-            except Exception:
-                continue
-            if len(nodes) == 0:
-                continue
-            all_nodes.append(nodes)
-            all_tris.append(tris + offset)
-            offset += len(nodes)
+    # decide the output grouping
+    outputs = {}
+    if weld_dimes and all(g in groups for g in dimes_groups):
+        outputs["dimes"] = np.vstack([groups.pop(g) for g in dimes_groups])
+    outputs.update(groups)                      # remaining groups as-is
 
-        if not all_nodes:
+    for name, tris_global in outputs.items():
+        if len(tris_global) == 0:
             continue
-
-        nodes_out = np.vstack(all_nodes)
-        tris_out = (np.vstack(all_tris) if all_tris
-                    else np.empty((0, 3), dtype=np.int64))
+        nodes_out, tris_out = _compact(points, tris_global)
 
         saved = []
-
         if save_npz:
             npz_path = f"{base_path}/{name}.npz"
             np.savez(npz_path, nodes=nodes_out, triangles=tris_out)
             saved.append(npz_path)
-
-        if save_ply and len(tris_out) > 0:
+        if save_ply:
             ply_path = f"{base_path}/{name}.ply"
             normals_out = compute_vertex_normals(nodes_out, tris_out) if ply_normals else None
             write_ply(ply_path, nodes_out, tris_out, normals=normals_out, ascii_format=ply_ascii)
             saved.append(ply_path)
-
         if saved:
             print(f"  saved {name:30s}  {len(nodes_out):6d} nodes  "
-                  f"{len(tris_out):6d} triangles  →  {',  '.join(saved)}")
+                  f"{len(tris_out):6d} triangles  ->  {',  '.join(saved)}")
+
 
 def make_dimes_mesh(mesh: MeshConfig = None, filename="test.msh", save_msh=False,
                     GUI_geo=False, GUI_msh=True, component_surfaces=None,
                     save_output=False, save_npz=None, save_ply=False,
-                    ply_normals=True, ply_ascii=True, scale=1., base_path:str=None):
+                    ply_normals=True, ply_ascii=True, scale=1., base_path: str = None,
+                    weld_dimes=True):
     """Finalize geometry, mesh it per `mesh`, label components, show GUIs, export.
 
-    Mesh options now live in `mesh` (a MeshConfig). `mesh.dim` replaces the old
-    `msh_dim` argument. Pass mesh=None to use defaults that match the original.
+    The mesh is written to a single .msh and PLY/NPZ are derived from it per
+    physical group (see save_component_meshes). `weld_dimes` controls whether
+    the DiMES top and side groups are fused into one component.
     """
     if mesh is None:
         mesh = MeshConfig().scale_parameters(scale=scale)
 
-    gmsh.model.occ.synchronize() 
+    gmsh.model.occ.synchronize()
 
     if GUI_geo:
         gmsh.fltk.run()
@@ -227,84 +212,34 @@ def make_dimes_mesh(mesh: MeshConfig = None, filename="test.msh", save_msh=False
             pg = gmsh.model.addPhysicalGroup(2, surf_tags)
             gmsh.model.setPhysicalName(2, pg, comp_name)
 
-    # Apply mesh options and generate
     mesh.generate()
 
     if GUI_msh:
         gmsh.fltk.run()
 
-    if save_msh:
-        gmsh.write(filename)
-
     # save_npz=None means "follow save_msh"; explicit True/False overrides
     _save_npz = save_msh if save_npz is None else save_npz
+    want_export = (mesh.dim == 2 and (_save_npz or save_ply)
+                   and save_output and component_surfaces is not None)
 
-    # Save per-component files for 2-D meshes (independent of save_msh)
-    if mesh.dim == 2 and (_save_npz or save_ply) and save_output and component_surfaces is not None:
-        _base_path = base_path if base_path is not None else os.path.splitext(filename)[0]
-        save_component_meshes(component_surfaces, _base_path, save_npz=_save_npz,
-                              save_ply=save_ply, ply_normals=ply_normals, ply_ascii=ply_ascii)
+    # Write the .msh once: keep it at `filename` if requested, else to a temp
+    # file used only to derive the per-component outputs and then removed.
+    msh_path = None
+    if save_msh:
+        gmsh.write(filename)
+        msh_path = filename
+    elif want_export:
+        fd, msh_path = tempfile.mkstemp(suffix=".msh")
+        os.close(fd)
+        gmsh.write(msh_path)
 
-    # Finalize GMSH
     gmsh.finalize()
 
-
-# def save_component_meshes(component_surfaces, base_path, save_npz=True, save_ply=False,
-#                           ply_normals=True, ply_ascii=False):
-#     """Save one .npz (and optionally one .ply) per component.
-
-#     Parameters
-#     ----------
-#     component_surfaces : dict
-#         {name: [surface_tag, ...]} as returned by make_dimes_geom.
-#     base_path : str
-#         Path prefix without extension, e.g. "/path/to/DiMES_3D".
-#         Output files are written as  <base_path>_<name>.npz / .ply.
-#     save_npz : bool
-#         Write a numpy .npz file for each component (default True).
-#     save_ply : bool
-#         Write a PLY file for each component (default False).
-#     ply_normals : bool
-#         Include per-vertex normals in PLY output (default True).
-#     ply_ascii : bool
-#         Write PLY in ASCII format instead of binary little-endian (default False).
-#     """
-#     for name, surf_tags in component_surfaces.items():
-#         all_nodes = []
-#         all_tris = []
-#         offset = 0
-
-#         for tag in surf_tags:
-#             try:
-#                 nodes, tris = extract_surface_mesh(tag)
-#             except Exception:
-#                 continue
-#             if len(nodes) == 0:
-#                 continue
-#             all_nodes.append(nodes)
-#             all_tris.append(tris + offset)
-#             offset += len(nodes)
-
-#         if not all_nodes:
-#             continue
-
-#         nodes_out = np.vstack(all_nodes)
-#         tris_out = (np.vstack(all_tris) if all_tris
-#                     else np.empty((0, 3), dtype=np.int64))
-
-#         saved = []
-
-#         if save_npz:
-#             npz_path = f"{base_path}_{name}.npz"
-#             np.savez(npz_path, nodes=nodes_out, triangles=tris_out)
-#             saved.append(npz_path)
-
-#         if save_ply and len(tris_out) > 0:
-#             ply_path = f"{base_path}_{name}.ply"
-#             normals_out = compute_vertex_normals(nodes_out, tris_out) if ply_normals else None
-#             write_ply(ply_path, nodes_out, tris_out, normals=normals_out, ascii_format=ply_ascii)
-#             saved.append(ply_path)
-
-#         if saved:
-#             print(f"  saved {name:30s}  {len(nodes_out):6d} nodes  "
-#                   f"{len(tris_out):6d} triangles  →  {',  '.join(saved)}")
+    if want_export:
+        _base_path = base_path if base_path is not None else os.path.splitext(filename)[0]
+        save_component_meshes(msh_path, _base_path,
+                              save_npz=_save_npz, save_ply=save_ply,
+                              ply_normals=ply_normals, ply_ascii=ply_ascii,
+                              weld_dimes=weld_dimes)
+        if not save_msh:
+            os.remove(msh_path)

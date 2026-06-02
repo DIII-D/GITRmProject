@@ -10,6 +10,7 @@ package-mode = true
 python = "^3.10"
 gmsh = "^4.13.1"
 numpy = ">=1.20"
+meshio = ">=5.0"
 
 [build-system]
 requires = ["poetry-core"]
