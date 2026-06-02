@@ -49,14 +49,29 @@ def compute_vertex_normals(nodes, triangles):
     v0 = nodes[triangles[:, 0]]
     v1 = nodes[triangles[:, 1]]
     v2 = nodes[triangles[:, 2]]
-    face_normals = np.cross(v1 - v0, v2 - v0)  # magnitude proportional to face area
+    face_normals = np.cross(v1 - v0, v2 - v0)
 
     vertex_normals = np.zeros_like(nodes, dtype=np.float64)
     for i in range(3):
         np.add.at(vertex_normals, triangles[:, i], face_normals)
 
     norms = np.linalg.norm(vertex_normals, axis=1, keepdims=True)
-    norms[norms == 0] = 1.0
+
+    # Identify degenerate vertices and warn
+    degenerate = (norms < np.finfo(np.float64).eps).ravel()
+    if np.any(degenerate):
+        import warnings
+        warnings.warn(
+            f"{degenerate.sum()} vertex/vertices with near-zero normals detected "
+            f"(indices: {np.where(degenerate)[0].tolist()}). "
+            "These are likely boundary or unreferenced vertices. "
+            "Falling back to (0, 0, 1).",
+            UserWarning,
+            stacklevel=2,
+        )
+        vertex_normals[degenerate] = [0.0, 0.0, 1.0]
+        norms[degenerate] = 1.0
+
     return vertex_normals / norms
 
 
