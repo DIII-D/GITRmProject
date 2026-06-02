@@ -100,9 +100,9 @@ class Annulus:
 class AngledSample:
     center: list[float] = field(default_factory=lambda: [0., 0., 0.])
     r: float = 0.3
-    height: float = 0.01
+    height: float = 0.001
     angle: float = 10 * math.pi / 180
-    z_cut: float = 0.015
+    z_cut: float = 0.025
 
     def scale_size(self, scale: float) -> None:
         self.r *= scale

@@ -14,9 +14,9 @@ scale = 0.01  # cm -> m
 
 # Three angled samples: centre, right, left
 sample_r      = 0.3   # cm
-sample_height = 0.05  # cm
+sample_height = 0.001 # cm
 sample_angle  = math.radians(10)
-sample_z_cut  = 0.015 # cm  (must be < 2 * r * tan(angle) ≈ 0.106 cm)
+sample_z_cut  = 0.025 # cm  (must be < 2 * r * tan(angle) ≈ 0.106 cm)
 
 x_tl, y_tl = -math.cos(math.radians(30)), math.sin(math.radians(30))
 x_tr, y_tr = math.cos(math.radians(30)), math.sin(math.radians(30))

@@ -140,7 +140,8 @@ def _compact(points, tris_global):
 
 def save_component_meshes(msh_path, base_path, save_npz=True, save_ply=False,
                           ply_normals=True, ply_ascii=False,
-                          weld_dimes=True, dimes_groups=("dimes_top", "dimes_side")):
+                          weld_dimes=True, dimes_groups=("dimes_top", "dimes_side"),
+                          save_all=False):
     """Derive one .npz (and optionally .ply) per component from a .msh.
 
     Each physical group is read against the shared global node block and then
@@ -158,11 +159,24 @@ def save_component_meshes(msh_path, base_path, save_npz=True, save_ply=False,
         they are written as separate components.
     dimes_groups : tuple[str, str]
         Names of the DiMES top and side physical groups to fuse.
+    save_all : bool
+        If True, additionally write a single 'all' mesh containing every
+        physical group merged into one (shared nodes deduplicated) -> all.ply
+        / all.npz, i.e. the whole .msh as one surface.
     """
     points, groups = _read_surface_groups(msh_path)
 
+    # whole-mesh "all" output, built before any group is popped/merged so it
+    # always covers every physical group exactly once (shared nodes deduped)
+    if save_all and groups:
+        outputs_all = np.vstack(list(groups.values()))
+    else:
+        outputs_all = None
+
     # decide the output grouping
     outputs = {}
+    if save_all and outputs_all is not None:
+        outputs["all"] = outputs_all
     if weld_dimes and all(g in groups for g in dimes_groups):
         outputs["dimes"] = np.vstack([groups.pop(g) for g in dimes_groups])
     outputs.update(groups)                      # remaining groups as-is
@@ -191,7 +205,7 @@ def make_dimes_mesh(mesh: MeshConfig = None, filename="test.msh", save_msh=False
                     GUI_geo=False, GUI_msh=True, component_surfaces=None,
                     save_output=False, save_npz=None, save_ply=False,
                     ply_normals=True, ply_ascii=True, scale=1., base_path: str = None,
-                    weld_dimes=True):
+                    weld_dimes=True, save_all=False):
     """Finalize geometry, mesh it per `mesh`, label components, show GUIs, export.
 
     The mesh is written to a single .msh and PLY/NPZ are derived from it per
@@ -240,6 +254,6 @@ def make_dimes_mesh(mesh: MeshConfig = None, filename="test.msh", save_msh=False
         save_component_meshes(msh_path, _base_path,
                               save_npz=_save_npz, save_ply=save_ply,
                               ply_normals=ply_normals, ply_ascii=ply_ascii,
-                              weld_dimes=weld_dimes)
+                              weld_dimes=weld_dimes, save_all=save_all)
         if not save_msh:
             os.remove(msh_path)

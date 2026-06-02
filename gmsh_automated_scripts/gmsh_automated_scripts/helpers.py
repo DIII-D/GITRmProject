@@ -170,7 +170,7 @@ def make_angled_sample(sample: Object2D):
     assert shape.z_cut < 2 * dz - 1e-10, \
         f"z_cut={shape.z_cut} too large! max allowed: {2*dz:.6f}"
 
-    margin = 0.1 * shape.r
+    margin = 1e-6 #shape.height * shape.r
 
     # 1. Cylinder
     cyl_bottom = shape.height - dz - margin
