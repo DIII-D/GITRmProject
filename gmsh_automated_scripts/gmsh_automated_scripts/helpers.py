@@ -85,17 +85,53 @@ def roto_Ztranslation(curve, coo: list[float], rot_axis: list[float], angle: flo
         gmsh.model.occ.synchronize()
 
 def truncated_cylinder_Ellipse(x, y, z, r, ax, ay, angle):
-    
-    if angle != 0.:
-        r1 = r / math.cos(angle) if abs(ay) > abs(ax) else r  # stretch x when rotating about y
-        r2 = r / math.cos(angle) if abs(ax) > abs(ay) else r  # stretch y when rotating about x
+    """
+    Flat ellipse that, once rotated by `angle` about the horizontal axis (ax, ay, 0),
+    lies exactly on the vertical cylinder of radius r.
+    The stretched (major) radius r/cos(angle) is perpendicular to the rotation axis.
+    """
+    if angle == 0.:
+        return gmsh.model.occ.addCircle(x, y, z, r)
 
-        # if r1 != r2 disk perimeter is an Ellipse
-        curve = gmsh.model.occ.addEllipse(x , y , z , r1, r2) # r1 along x, r2 along y by default from .addEllipse method
-    else:
-        curve = gmsh.model.occ.addCircle(x, y, z, r)
+    norm = math.hypot(ax, ay)
+    if norm == 0.:
+        raise ValueError("rotation axis must have a non-zero (ax, ay) component when angle != 0")
 
-    return curve
+    r_major = r / math.cos(angle)
+
+    print(f"  truncated_cylinder_Ellipse: r_major={r_major:.2e}, r_minor={r:.2e}, angle={math.degrees(angle):.2f} deg")
+
+    # gmsh requires r1 >= r2, with r1 along xAxis
+    return gmsh.model.occ.addEllipse(x, y, z, r_major, r,
+                                     zAxis=[0., 0., 1.], xAxis=[-ay / norm, ax / norm, 0.])
+
+
+def truncated_cylinder_side(x, y, z, r, ax, ay, az, angle, dz):
+    """
+    Lateral wall of a vertical cylinder (radius r, base at z) truncated by the tilted plane
+    obtained rotating the plane z by `angle` about (ax, ay, az) through (x, y, z), then
+    translating it by dz along z. Built as an exact OCC cut rather than addThruSections,
+    which twists when base circle and top ellipse touch at the lowest point.
+    Returns the list of side surface tags.
+    """
+    occ = gmsh.model.occ
+
+    cyl = occ.addCylinder(x, y, z, 0, 0, 4 * r * abs(math.tan(angle)) + dz, r)
+
+    box = occ.addBox(x - 2 * r, y - 2 * r, z, 4 * r, 4 * r, 4 * r)  # half-space above the plane
+    occ.rotate([(3, box)], x, y, z, ax, ay, az, angle)
+    occ.translate([(3, box)], 0, 0, dz)
+
+    vol, _ = occ.cut([(3, cyl)], [(3, box)], removeObject=True, removeTool=True)
+    occ.synchronize()
+
+    side = [f for f in gmsh.model.getBoundary(vol, oriented=False) if gmsh.model.getType(*f) == "Cylinder"]
+    side = occ.copy(side)
+    occ.remove(vol, recursive=True)
+    occ.synchronize()
+
+    return [tag for _, tag in side]
+
 
 def truncated_cylinder_loop(x, y, z, r,
               ax, ay, az,

@@ -10,6 +10,7 @@ from .data_structures import *
 from .helpers import *
 from .export import *
 import gmsh
+import math
 
 
 def make_flush_sample(sample):
@@ -50,6 +51,7 @@ def build_dimes_domain(
     filename: str = "dimes.msh",
     save_msh: bool = False,
     save_output: bool = False,
+    save_all: bool = False,
     save_npz: bool = None,
     save_ply: bool = False,
     ply_normals: bool = True,
@@ -72,11 +74,19 @@ def build_dimes_domain(
     label = "tile")
     *_, tile_loop = rectangle_loop(*tile_obj.shape.ll, tile_obj.shape.width, tile_obj.shape.height)
 
-    # DiMES top-edge ellipse (projects the tilted disk footprint onto z=0)
+    # DiMES top-edge ellipse: once rotated, it lies on the vertical cylinder of radius r
     curve = truncated_cylinder_Ellipse(*dimes_shape.center, dimes_shape.r, ax, ay, angle)
     dimes_outer_loop = gmsh.model.occ.addCurveLoop([curve])
 
-    tile_obj.surface_tag = gmsh.model.occ.addPlaneSurface([tile_loop, dimes_outer_loop])
+    # DiMES footprint on the tile is the cylinder base circle (same as the top when flat)
+    if angle != 0.:
+        dimes_base_loop = gmsh.model.occ.addCurveLoop(
+            [gmsh.model.occ.addCircle(*dimes_shape.center, dimes_shape.r)]
+        )
+    else:
+        dimes_base_loop = dimes_outer_loop
+
+    tile_obj.surface_tag = gmsh.model.occ.addPlaneSurface([tile_loop, dimes_base_loop])
 
     # Sample holes
     inner_loops, samples = [], []
@@ -101,26 +111,22 @@ def build_dimes_domain(
     # Rotate all DiMES-plane surfaces together
     if angle != 0.:
         cx, cy, cz = dimes_shape.center
+        # lowest point of the rotated ellipse drops by (r/cos)*sin = r*tan; lift it back to cz.
+        # Exact value instead of getBoundingBox, which OCC computes loosely.
+        dz = dimes_shape.r * abs(math.tan(angle))
         all_surfaces = [(2, dimes_top_obj.surface_tag)] + [(2, s.surface_tag) for s in samples]
         gmsh.model.occ.rotate(all_surfaces, cx, cy, cz, ax, ay, az, angle)
-        gmsh.model.occ.synchronize()
-        _, _, z_min, _, _, _ = gmsh.model.getBoundingBox(2, dimes_top_obj.surface_tag)
-        gmsh.model.occ.translate(all_surfaces, 0, 0, cz - z_min)
+        gmsh.model.occ.translate(all_surfaces, 0, 0, dz)
         gmsh.model.occ.synchronize()
 
     objects = [tile_obj, dimes_top_obj] + samples
 
     # DiMES side surface — only exists when the head is tilted
     if angle != 0.:
-        dimes_base_loop = gmsh.model.occ.addCurveLoop(
-            [gmsh.model.occ.addCircle(*dimes_shape.center, dimes_shape.r)]
-        )
-        result = gmsh.model.occ.addThruSections(
-            [dimes_base_loop, dimes_outer_loop], makeSolid=False
-        )
-        gmsh.model.occ.synchronize()
         dimes_side_obj = Object2D(shape=dimes_shape, label="dimes_side")
-        dimes_side_obj.surface_tag = result[0][1]
+        dimes_side_obj.surface_tag = truncated_cylinder_side(
+            cx, cy, cz, dimes_shape.r, ax, ay, az, angle, dz
+        )
         objects.append(dimes_side_obj)
 
     component_surfaces = {
@@ -136,6 +142,7 @@ def build_dimes_domain(
         filename=filename,
         save_msh=save_msh,
         save_output=save_output,
+        save_all=save_all,
         save_npz=save_npz,
         save_ply=save_ply,
         ply_normals=ply_normals,
