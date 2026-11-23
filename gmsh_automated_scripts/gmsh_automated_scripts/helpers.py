@@ -103,34 +103,58 @@ def truncated_cylinder_Ellipse(x, y, z, r, ax, ay, angle):
 
     # gmsh requires r1 >= r2, with r1 along xAxis
     return gmsh.model.occ.addEllipse(x, y, z, r_major, r,
-                                     zAxis=[0., 0., 1.], xAxis=[-ay / norm, ax / norm, 0.])
+                                     zAxis=[0., 0., 1.], xAxis=_rim_xAxis(ax, ay, angle))
 
 
-def truncated_cylinder_side(x, y, z, r, ax, ay, az, angle, dz):
+def _rim_xAxis(ax, ay, angle):
     """
-    Lateral wall of a vertical cylinder (radius r, base at z) truncated by the tilted plane
-    obtained rotating the plane z by `angle` about (ax, ay, az) through (x, y, z), then
-    translating it by dz along z. Built as an exact OCC cut rather than addThruSections,
-    which twists when base circle and top ellipse touch at the lowest point.
+    Direction perpendicular to the horizontal rotation axis, pointing to the end of the
+    major axis that RISES when rotating by `angle` (z x a rotates towards +z for angle > 0).
+    Curves start there, so the seam of the side loft is the tallest ruling, not the
+    zero-length one at the touching point.
+    """
+    s = math.copysign(1., angle) / math.hypot(ax, ay)
+    return [-ay * s, ax * s, 0.]
+
+
+def truncated_cylinder_base(x, y, z, r, ax, ay, angle):
+    """
+    Base circle of the truncated cylinder, parametrised from the same xAxis as
+    truncated_cylinder_Ellipse so that a ruled loft between the two is vertical.
+    """
+    return gmsh.model.occ.addCircle(x, y, z, r, zAxis=[0., 0., 1.], xAxis=_rim_xAxis(ax, ay, angle))
+
+
+def find_rim_curve(surface_tag, x, y, r, tol=1e-9):
+    """Boundary curve of `surface_tag` lying entirely on the vertical cylinder (x, y, r)."""
+    gmsh.model.occ.synchronize()
+    for _, c in gmsh.model.getBoundary([(2, surface_tag)], oriented=False):
+        lo, hi = gmsh.model.getParametrizationBounds(1, c)
+        pts = np.reshape(gmsh.model.getValue(1, c, list(np.linspace(lo[0], hi[0], 7))), (-1, 3))
+        if np.all(np.abs(np.hypot(pts[:, 0] - x, pts[:, 1] - y) - r) < tol * max(r, 1.)):
+            return c
+    raise RuntimeError(f"no boundary curve of surface {surface_tag} lies on the cylinder of radius {r}")
+
+
+def truncated_cylinder_side(base_curve, top_curve):
+    """
+    Lateral wall of a vertical cylinder truncated by a tilted plane, as a RULED loft
+    between the base circle and the top ellipse. Both must be parametrised from the same
+    xAxis (truncated_cylinder_base / truncated_cylinder_Ellipse): points with equal
+    parameter share the same polar angle, so every ruling is vertical and the surface
+    is the cylinder wall. The loft reuses both curves, so the side shares its edges with
+    the surfaces bounded by them (conformal mesh without fragment).
+    - a smooth (non-ruled) loft twists, since the sections touch at the lowest point;
+    - a cylinder/box cut is exact but OCC gives the tangent touching vertex a ~0.5 mm
+      tolerance, which makes fragment swallow nearby sample vertices.
     Returns the list of side surface tags.
     """
     occ = gmsh.model.occ
-
-    cyl = occ.addCylinder(x, y, z, 0, 0, 4 * r * abs(math.tan(angle)) + dz, r)
-
-    box = occ.addBox(x - 2 * r, y - 2 * r, z, 4 * r, 4 * r, 4 * r)  # half-space above the plane
-    occ.rotate([(3, box)], x, y, z, ax, ay, az, angle)
-    occ.translate([(3, box)], 0, 0, dz)
-
-    vol, _ = occ.cut([(3, cyl)], [(3, box)], removeObject=True, removeTool=True)
+    out = occ.addThruSections([occ.addWire([base_curve]), occ.addWire([top_curve])],
+                              makeSolid=False, makeRuled=True)
     occ.synchronize()
 
-    side = [f for f in gmsh.model.getBoundary(vol, oriented=False) if gmsh.model.getType(*f) == "Cylinder"]
-    side = occ.copy(side)
-    occ.remove(vol, recursive=True)
-    occ.synchronize()
-
-    return [tag for _, tag in side]
+    return [tag for dim, tag in out if dim == 2]
 
 
 def truncated_cylinder_loop(x, y, z, r,
